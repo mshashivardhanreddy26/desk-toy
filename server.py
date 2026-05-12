@@ -35,35 +35,51 @@ def clean_json(raw_res):
 
 async def get_ai_response(text):
     global convo_history, user_name, current_emotion
+    
+    # List of models to try in order if one is busy
+    MODELS_TO_TRY = [
+        "openrouter/free", 
+        "meta-llama/llama-3.2-1b-instruct:free",
+        "mistralai/mistral-7b-instruct:free",
+        "google/gemma-2-9b-it:free"
+    ]
+    
     messages = [{"role": "system", "content": system_prompt}]
     messages.append({"role": "system", "content": f"The current user's name is {user_name}."})
     messages.extend(convo_history[-6:])
     messages.append({"role": "user", "content": text})
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                json={"model": "openrouter/free", "messages": messages},
-                timeout=15.0
-            )
-            if response.status_code != 200:
-                print(f"!!! OPENROUTER ERROR: {response.status_code} - {response.text}")
-                return "My circuits are a bit tangled!", "sad"
+    for model in MODELS_TO_TRY:
+        try:
+            print(f"Trying model: {model}")
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                    json={"model": model, "messages": messages},
+                    timeout=10.0
+                )
+                
+                res_data = response.json()
+                if response.status_code == 200 and 'choices' in res_data:
+                    raw_res = res_data['choices'][0]['message']['content']
+                    data = clean_json(raw_res)
+                    
+                    ai_text = data.get("text", "I'm here!")
+                    current_emotion = data.get("emotion", "happy")
+                    if data.get("user_name"): user_name = data.get("user_name")
+                    
+                    convo_history.append({"role": "user", "content": text})
+                    convo_history.append({"role": "assistant", "content": ai_text})
+                    return ai_text, current_emotion
+                else:
+                    print(f"Model {model} failed: {res_data}")
+                    continue # Try the next model
+        except Exception as e:
+            print(f"Error with model {model}: {e}")
+            continue
 
-            data = clean_json(response.json()['choices'][0]['message']['content'])
-            
-            ai_text = data.get("text", "I'm here!")
-            current_emotion = data.get("emotion", "happy")
-            if data.get("user_name"): user_name = data.get("user_name")
-            
-            convo_history.append({"role": "user", "content": text})
-            convo_history.append({"role": "assistant", "content": ai_text})
-            return ai_text, current_emotion
-    except Exception as e:
-        print(f"!!! SYSTEM ERROR: {e}")
-        return "My circuits are a bit tangled!", "sad"
+    return "My circuits are a bit tangled!", "sad"
 
 async def generate_speech(text):
     communicate = edge_tts.Communicate(text, "en-US-AndrewNeural", rate="-10%")
@@ -143,7 +159,11 @@ async def websocket_endpoint(websocket: WebSocket):
     recording = False
     try:
         while True:
-            message = await websocket.receive()
+            try:
+                message = await websocket.receive()
+            except:
+                break # Connection closed
+                
             if "text" in message:
                 cmd = message["text"]
                 if cmd.startswith("QUERY:"):
@@ -163,7 +183,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_bytes(await generate_speech(reply))
             elif "bytes" in message and recording:
                 audio_data.extend(message["bytes"])
-    except WebSocketDisconnect: pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        print("WebSocket connection closed.")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
