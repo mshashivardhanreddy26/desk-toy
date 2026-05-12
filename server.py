@@ -8,6 +8,7 @@ import edge_tts
 from pydub import AudioSegment
 import uvicorn
 import asyncio
+import re
 
 app = FastAPI()
 
@@ -63,7 +64,6 @@ async def get_ai_response(text):
     global convo_history, user_name, last_interaction
     
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    # Add a small reminder of the current user name
     messages.append({"role": "system", "content": f"The current user's name is {user_name}."})
     messages.extend(convo_history[-4:])
     messages.append({"role": "user", "content": text})
@@ -75,28 +75,37 @@ async def get_ai_response(text):
                 headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
                 json={
                     "model": "openrouter/free", 
-                    "messages": messages,
-                    "response_format": {"type": "json_object"}
+                    "messages": messages
                 },
                 timeout=15.0
             )
             
-            # Parse the JSON response
-            res_json = response.json()['choices'][0]['message']['content']
-            data = json.loads(res_json)
+            if response.status_code != 200:
+                print(f"API Error: {response.status_code} {response.text}")
+                return "My brain is a bit fuzzy!", "thinking"
+
+            raw_res = response.json()['choices'][0]['message']['content']
             
-            ai_text = data.get("text", "I'm happy to see you!")
+            # --- ROBUST JSON CLEANING ---
+            # Sometimes AI adds ```json ... ``` blocks, we need to strip them
+            json_match = re.search(r'\{.*\}', raw_res, re.DOTALL)
+            if json_match:
+                clean_json = json_match.group(0)
+                data = json.loads(clean_json)
+            else:
+                # If AI didn't return JSON, fallback
+                data = {"text": raw_res, "emotion": "happy"}
+
+            ai_text = data.get("text", "Hello!")
             emotion = data.get("emotion", "happy")
             new_name = data.get("user_name")
             
-            if new_name and new_name != "null":
+            if new_name and new_name != "null" and len(new_name) < 20:
                 user_name = new_name
             
-            # Update History
             convo_history.append({"role": "user", "content": text})
             convo_history.append({"role": "assistant", "content": ai_text})
             
-            # Update Dashboard
             last_interaction["user"] = text
             last_interaction["ai"] = ai_text
             last_interaction["emotion"] = emotion
@@ -104,7 +113,7 @@ async def get_ai_response(text):
             return ai_text, emotion
             
     except Exception as e:
-        print(f"AI Error: {e}")
+        print(f"AI Processing Error: {e}")
         return "I'm having a little nap right now!", "sleepy"
 
 async def generate_speech(text):
@@ -159,6 +168,7 @@ async def root():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    global last_interaction
     audio_data = bytearray()
     recording = False
 
@@ -170,11 +180,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 if command.startswith("QUERY:"):
                     user_text = command.replace("QUERY:", "").strip()
                     ai_text, emotion = await get_ai_response(user_text)
-                    
                     await websocket.send_text(json.dumps({"text": ai_text, "emotion": emotion}))
                     pcm_voice = await generate_speech(ai_text)
                     await websocket.send_bytes(pcm_voice)
-                    
                 elif command == "START":
                     recording = True
                     audio_data = bytearray()
@@ -183,11 +191,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     user_text = transcribe_audio_groq(audio_data)
                     if user_text.strip():
                         ai_text, emotion = await get_ai_response(user_text)
-                        # Send text + emotion as JSON to the ESP32
                         await websocket.send_text(json.dumps({"text": ai_text, "emotion": emotion}))
                         pcm_voice = await generate_speech(ai_text)
                         await websocket.send_bytes(pcm_voice)
-            
             elif "bytes" in message and recording:
                 audio_data.extend(message["bytes"])
     except WebSocketDisconnect:
