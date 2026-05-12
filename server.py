@@ -117,15 +117,16 @@ async def get_ai_response(text):
         return "I'm having a little nap right now!", "sleepy"
 
 async def generate_speech(text):
-    voice = "en-US-AnaNeural" 
-    communicate = edge_tts.Communicate(text, voice, rate="-40%")
+    # Upgraded to 24000Hz for Crystal Clear Voice
+    voice = "en-US-AndrewNeural" 
+    communicate = edge_tts.Communicate(text, voice, rate="-10%")
     mp3_data = bytearray()
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
             mp3_data.extend(chunk["data"])
     
     audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
-    audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+    audio = audio.set_frame_rate(24000).set_channels(1).set_sample_width(2)
     return audio.raw_data
 
 @app.get("/")
