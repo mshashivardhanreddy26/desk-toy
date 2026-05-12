@@ -79,18 +79,24 @@ def get_ai_response(text):
     global convo_history
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *convo_history[-4:], {"role": "user", "content": text}]
     try:
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-            json={"model": "openrouter/free", "messages": messages},
-            timeout=10.0
-        )
-        ai_text = response.json()['choices'][0]['message']['content']
-        convo_history.append({"role": "user", "content": text})
-        convo_history.append({"role": "assistant", "content": ai_text})
-        return ai_text
-    except:
-        return "I'm having trouble thinking."
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                json={"model": "openrouter/free", "messages": messages},
+                timeout=10.0
+            )
+            if response.status_code != 200:
+                print(f"OpenRouter Error: {response.status_code} - {response.text}")
+                return "My brain feels a bit slow right now."
+            
+            ai_text = response.json()['choices'][0]['message']['content']
+            convo_history.append({"role": "user", "content": text})
+            convo_history.append({"role": "assistant", "content": ai_text})
+            return ai_text
+    except Exception as e:
+        print(f"AI Connection Error: {e}")
+        return "I'm having trouble connecting to my brain."
 
 async def generate_speech(text):
     # Use Edge-TTS for a very natural voice with -15% speed
@@ -118,7 +124,20 @@ async def websocket_endpoint(websocket: WebSocket):
             message = await websocket.receive()
             if "text" in message:
                 command = message["text"]
-                if command == "START":
+                if command.startswith("QUERY:"):
+                    # Direct text test (skips STT)
+                    user_text = command.replace("QUERY:", "").strip()
+                    print(f"Test Query: {user_text}")
+                    ai_text = await get_ai_response(user_text)
+                    
+                    global last_interaction
+                    last_interaction["user"] = user_text
+                    last_interaction["ai"] = ai_text
+                    
+                    await websocket.send_text(ai_text)
+                    pcm_voice = await generate_speech(ai_text)
+                    await websocket.send_bytes(pcm_voice)
+                elif command == "START":
                     recording = True
                     audio_data = bytearray()
                 elif command == "STOP":
