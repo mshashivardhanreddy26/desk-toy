@@ -16,7 +16,41 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 convo_history = []
-SYSTEM_PROMPT = "You are a cute emotional desk robot. Speak briefly (1-2 sentences)."
+SYSTEM_PROMPT = "You are a cute emotional desk robot. Speak briefly (1-2 sentences."
+
+# Global variables for the Dashboard
+last_interaction = {"user": "None yet", "ai": "Waiting for robot..."}
+
+@app.get("/")
+async def root():
+    from fastapi.responses import HTMLResponse
+    html_content = f"""
+    <html>
+        <head>
+            <title>Robot Dashboard</title>
+            <style>
+                body {{ font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }}
+                .box {{ background: #1e1e1e; padding: 20px; border-radius: 15px; display: inline-block; min-width: 300px; border: 1px solid #333; }}
+                h1 {{ color: #00ff88; }}
+                .label {{ color: #888; font-size: 0.8em; margin-bottom: 5px; }}
+                .text {{ font-size: 1.2em; margin-bottom: 20px; color: #fff; }}
+            </style>
+            <meta http-equiv="refresh" content="3"> 
+        </head>
+        <body>
+            <h1>Robot Brain Dashboard</h1>
+            <div class="box">
+                <div class="label">YOU SAID:</div>
+                <div class="text">"{last_interaction['user']}"</div>
+                <hr style="border: 0; border-top: 1px solid #333;">
+                <div class="label">ROBOT REPLIED:</div>
+                <div class="text" style="color: #00ff88;">{last_interaction['ai']}</div>
+            </div>
+            <p style="color: #444; font-size: 0.8em;">Page auto-refreshes every 3 seconds</p>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 def transcribe_audio_groq(audio_bytes):
     try:
@@ -92,6 +126,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     user_text = transcribe_audio_groq(audio_data)
                     if user_text.strip():
                         ai_text = get_ai_response(user_text)
+                        
+                        # Update the Dashboard
+                        global last_interaction
+                        last_interaction["user"] = user_text
+                        last_interaction["ai"] = ai_text
                         
                         # 1. Send the text response back first
                         await websocket.send_text(ai_text)
