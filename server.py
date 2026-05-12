@@ -205,9 +205,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                     voice = await generate_speech(reply)
                     if voice:
-                        # 8KB chunks and 0.05s sleep for Rock-Solid Stability
-                        chunk_size = 8192
-                        print(f"WS-SEND: Sending {len(voice)} bytes in 8KB chunks...")
+                        # 2KB chunks and 0.05s sleep for Maximum ESP32 Stability
+                        chunk_size = 2048
+                        print(f"WS-SEND: Sending {len(voice)} bytes in 2KB chunks...")
                         for i in range(0, len(voice), chunk_size):
                             await websocket.send_bytes(voice[i:i + chunk_size])
                             await asyncio.sleep(0.05) 
@@ -225,8 +225,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                         voice = await generate_speech(reply)
                         if voice:
-                            chunk_size = 8192
-                            print(f"WS-SEND: Sending {len(voice)} bytes in 8KB chunks...")
+                            chunk_size = 2048
+                            print(f"WS-SEND: Sending {len(voice)} bytes in 2KB chunks...")
                             for i in range(0, len(voice), chunk_size):
                                 await websocket.send_bytes(voice[i:i + chunk_size])
                                 await asyncio.sleep(0.05)
