@@ -112,15 +112,23 @@ async def get_ai_response(text):
 
 async def generate_speech(text):
     try:
+        print(f"VOICE-BOX: Starting for '{text}'")
         communicate = edge_tts.Communicate(text, "en-US-AndrewNeural", rate="-10%")
         mp3_data = bytearray()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio": mp3_data.extend(chunk["data"])
+        
+        if not mp3_data:
+            print("VOICE-BOX: !!! FAILED (No data from Edge-TTS)")
+            return None
+            
+        # Convert to PCM using pydub
         audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
         audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        print(f"VOICE-BOX: SUCCESS! Created {len(audio.raw_data)} bytes")
         return audio.raw_data
     except Exception as e:
-        print(f"Voice Error: {e}")
+        print(f"VOICE-BOX: !!! CRASHED: {e}")
         return None
 
 # --- ROUTES ---
@@ -197,9 +205,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                     voice = await generate_speech(reply)
                     if voice:
+                        num_chunks = (len(voice) + 4095) // 4096
+                        print(f"WS-SEND: Sending {num_chunks} chunks...")
                         for i in range(0, len(voice), 4096):
                             await websocket.send_bytes(voice[i:i + 4096])
+                            print(f"Sent chunk {i//4096}")
                             await asyncio.sleep(0.01)
+                        print("WS-SEND: All chunks sent!")
+                    else:
+                        print("WS-SEND: !!! Skipped (No voice)")
                 elif cmd == "START":
                     recording = True
                     audio_data = bytearray()
@@ -211,9 +225,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                         voice = await generate_speech(reply)
                         if voice:
+                            num_chunks = (len(voice) + 4095) // 4096
+                            print(f"WS-SEND: Sending {num_chunks} chunks...")
                             for i in range(0, len(voice), 4096):
                                 await websocket.send_bytes(voice[i:i + 4096])
                                 await asyncio.sleep(0.01)
+                            print("WS-SEND: All chunks sent!")
+                        else:
+                            print("WS-SEND: !!! Skipped (No voice)")
             elif "bytes" in message and recording:
                 audio_data.extend(message["bytes"])
     except WebSocketDisconnect: pass
