@@ -205,12 +205,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                     voice = await generate_speech(reply)
                     if voice:
-                        num_chunks = (len(voice) + 4095) // 4096
-                        print(f"WS-SEND: Sending {num_chunks} chunks...")
-                        for i in range(0, len(voice), 4096):
-                            await websocket.send_bytes(voice[i:i + 4096])
-                            print(f"Sent chunk {i//4096}")
-                            await asyncio.sleep(0.01)
+                        # 8KB chunks and 0.05s sleep for Rock-Solid Stability
+                        chunk_size = 8192
+                        print(f"WS-SEND: Sending {len(voice)} bytes in 8KB chunks...")
+                        for i in range(0, len(voice), chunk_size):
+                            await websocket.send_bytes(voice[i:i + chunk_size])
+                            await asyncio.sleep(0.05) 
                         print("WS-SEND: All chunks sent!")
                     else:
                         print("WS-SEND: !!! Skipped (No voice)")
@@ -225,11 +225,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                         voice = await generate_speech(reply)
                         if voice:
-                            num_chunks = (len(voice) + 4095) // 4096
-                            print(f"WS-SEND: Sending {num_chunks} chunks...")
-                            for i in range(0, len(voice), 4096):
-                                await websocket.send_bytes(voice[i:i + 4096])
-                                await asyncio.sleep(0.01)
+                            chunk_size = 8192
+                            print(f"WS-SEND: Sending {len(voice)} bytes in 8KB chunks...")
+                            for i in range(0, len(voice), chunk_size):
+                                await websocket.send_bytes(voice[i:i + chunk_size])
+                                await asyncio.sleep(0.05)
                             print("WS-SEND: All chunks sent!")
                         else:
                             print("WS-SEND: !!! Skipped (No voice)")
