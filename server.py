@@ -92,7 +92,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     user_text = transcribe_audio_groq(audio_data)
                     if user_text.strip():
                         ai_text = get_ai_response(user_text)
-                        # Generate the voice response
+                        
+                        # 1. Send the text response back first
+                        await websocket.send_text(ai_text)
+                        
+                        # 2. Generate and send the voice response
                         pcm_voice = await generate_speech(ai_text)
                         await websocket.send_bytes(pcm_voice)
             
