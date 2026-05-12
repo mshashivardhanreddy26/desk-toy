@@ -116,6 +116,7 @@ async def generate_speech(text):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    global last_interaction
     audio_data = bytearray()
     recording = False
 
@@ -130,7 +131,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     print(f"Test Query: {user_text}")
                     ai_text = await get_ai_response(user_text)
                     
-                    global last_interaction
                     last_interaction["user"] = user_text
                     last_interaction["ai"] = ai_text
                     
@@ -147,7 +147,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         ai_text = get_ai_response(user_text)
                         
                         # Update the Dashboard
-                        global last_interaction
                         last_interaction["user"] = user_text
                         last_interaction["ai"] = ai_text
                         
