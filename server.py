@@ -74,24 +74,26 @@ def transcribe_audio_groq(audio_bytes):
 
 async def get_ai_response(text):
     global convo_history, user_name, current_emotion, last_interaction
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.append({"role": "system", "content": f"The current user's name is {user_name}."})
+    # Combined system prompt for better model compatibility
+    full_system = f"{system_prompt}\nThe current user's name is {user_name}."
+    
+    messages = [{"role": "system", "content": full_system}]
     messages.extend(convo_history[-6:])
     messages.append({"role": "user", "content": text})
 
     try:
         async with httpx.AsyncClient() as client:
-            # LATEST GROQ MODEL (Llama 3.1 8B)
+            # LATEST GROQ MODEL (Llama 3.3 70B)
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-                json={"model": "llama-3.1-8b-instant", "messages": messages},
-                timeout=10.0
+                json={"model": "llama-3.3-70b-versatile", "messages": messages},
+                timeout=15.0
             )
             
             res_data = response.json()
             if 'choices' not in res_data:
-                print(f"Groq Error: {res_data}")
+                print(f"!!! GROQ BRAIN ERROR: {res_data}")
                 return "My brain is buzzing!", "thinking"
 
             data = clean_json(res_data['choices'][0]['message']['content'])
