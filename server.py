@@ -48,6 +48,10 @@ async def get_ai_response(text):
                 json={"model": "openrouter/free", "messages": messages},
                 timeout=15.0
             )
+            if response.status_code != 200:
+                print(f"!!! OPENROUTER ERROR: {response.status_code} - {response.text}")
+                return "My circuits are a bit tangled!", "sad"
+
             data = clean_json(response.json()['choices'][0]['message']['content'])
             
             ai_text = data.get("text", "I'm here!")
@@ -57,7 +61,8 @@ async def get_ai_response(text):
             convo_history.append({"role": "user", "content": text})
             convo_history.append({"role": "assistant", "content": ai_text})
             return ai_text, current_emotion
-    except:
+    except Exception as e:
+        print(f"!!! SYSTEM ERROR: {e}")
         return "My circuits are a bit tangled!", "sad"
 
 async def generate_speech(text):
