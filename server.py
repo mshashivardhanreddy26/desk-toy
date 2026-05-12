@@ -75,7 +75,7 @@ def transcribe_audio_groq(audio_bytes):
         print(f"STT Error: {e}")
         return ""
 
-def get_ai_response(text):
+async def get_ai_response(text):
     global convo_history
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *convo_history[-4:], {"role": "user", "content": text}]
     try:
@@ -144,7 +144,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     recording = False
                     user_text = transcribe_audio_groq(audio_data)
                     if user_text.strip():
-                        ai_text = get_ai_response(user_text)
+                        ai_text = await get_ai_response(user_text)
                         
                         # Update the Dashboard
                         last_interaction["user"] = user_text
