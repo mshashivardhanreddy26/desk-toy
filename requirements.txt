@@ -4,3 +4,4 @@ httpx
 edge-tts
 pydub
 websockets
+python-multipart
