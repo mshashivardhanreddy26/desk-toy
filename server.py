@@ -15,8 +15,6 @@ app = FastAPI()
 
 # --- PERSISTENT STATE ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-# Memory Persistence
 MEMORY_FILE = "memory.json"
 
 def load_memory():
@@ -35,12 +33,11 @@ user_name = mem["user_name"]
 convo_history = mem["convo_history"]
 current_emotion = "idle"
 last_interaction = {"user": "None yet", "ai": "Waiting...", "emotion": "idle"}
-
 system_prompt = """You are 'Bit', a cute emotional desk robot. 
 Keep answers under 2 sentences. 
 If the user tells you their name, you MUST update the "user_name" field in your JSON.
 Format your response EXACTLY as JSON:
-{"emotion": "...", "text": "...", "user_name": "..."}"""
+{"emotion": "one of: idle, happy, excited, thinking, sleepy, sad", "text": "...", "user_name": "..."}"""
 
 # --- UTILS ---
 def clean_json(raw_res):
@@ -52,78 +49,76 @@ def clean_json(raw_res):
     except:
         return {"text": raw_res, "emotion": "thinking", "user_name": None}
 
+def transcribe_audio_groq(audio_bytes):
+    try:
+        with io.BytesIO() as wav_buffer:
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(16000)
+                wav_file.writeframes(audio_bytes)
+            wav_data = wav_buffer.getvalue()
+
+        files = {"file": ("audio.wav", wav_data)}
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            data={"model": "whisper-large-v3"},
+            files=files,
+            timeout=10.0
+        )
+        return response.json().get("text", "")
+    except Exception as e:
+        print(f"STT Error: {e}")
+        return ""
+
 async def get_ai_response(text):
-    global convo_history, user_name, current_emotion
-    
-    # List of models to try in order if one is busy
-    MODELS_TO_TRY = [
-        "openrouter/free", 
-        "meta-llama/llama-3.2-1b-instruct:free",
-        "mistralai/mistral-7b-instruct:free",
-        "google/gemma-2-9b-it:free"
-    ]
-    
+    global convo_history, user_name, current_emotion, last_interaction
     messages = [{"role": "system", "content": system_prompt}]
     messages.append({"role": "system", "content": f"The current user's name is {user_name}."})
     messages.extend(convo_history[-6:])
     messages.append({"role": "user", "content": text})
 
-    for model in MODELS_TO_TRY:
-        try:
-            print(f"Trying model: {model}")
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                    json={"model": model, "messages": messages},
-                    timeout=10.0
-                )
-                
-                res_data = response.json()
-                if response.status_code == 200 and 'choices' in res_data:
-                    raw_res = res_data['choices'][0]['message']['content']
-                    data = clean_json(raw_res)
-                    
-                    ai_text = data.get("text", "I'm here!")
-                    current_emotion = data.get("emotion", "happy")
-                    if data.get("user_name"): user_name = data.get("user_name")
-                    
-                    convo_history.append({"role": "user", "content": text})
-                    convo_history.append({"role": "assistant", "content": ai_text})
-                    
-                    # Update Dashboard
-                    global last_interaction
-                    last_interaction["user"] = text
-                    last_interaction["ai"] = ai_text
-                    last_interaction["emotion"] = current_emotion
+    try:
+        async with httpx.AsyncClient() as client:
+            # SWITCHED TO GROQ FOR BRAIN (Llama 3 8B)
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                json={"model": "llama3-8b-8192", "messages": messages},
+                timeout=10.0
+            )
+            
+            res_data = response.json()
+            if 'choices' not in res_data:
+                print(f"Groq Error: {res_data}")
+                return "My brain is buzzing!", "thinking"
 
-                    # Persist to disk
-                    save_memory(user_name, convo_history)
-                    
-                    return ai_text, current_emotion
-                else:
-                    print(f"Model {model} failed: {res_data}")
-                    continue # Try the next model
-        except Exception as e:
-            print(f"Error with model {model}: {e}")
-            continue
-
-    return "My circuits are a bit tangled!", "sad"
+            data = clean_json(res_data['choices'][0]['message']['content'])
+            ai_text = data.get("text", "I'm here!")
+            current_emotion = data.get("emotion", "happy")
+            if data.get("user_name"): user_name = data.get("user_name")
+            
+            convo_history.append({"role": "user", "content": text})
+            convo_history.append({"role": "assistant", "content": ai_text})
+            last_interaction.update({"user": text, "ai": ai_text, "emotion": current_emotion})
+            save_memory(user_name, convo_history)
+            return ai_text, current_emotion
+    except Exception as e:
+        print(f"Brain Error: {e}")
+        return "I need a little rest!", "sleepy"
 
 async def generate_speech(text):
     try:
-        print(f"Generating voice for: {text}")
         communicate = edge_tts.Communicate(text, "en-US-AndrewNeural", rate="-10%")
         mp3_data = bytearray()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio": mp3_data.extend(chunk["data"])
-        
         audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
         audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
-        print(f"Audio generated: {len(audio.raw_data)} bytes")
         return audio.raw_data
     except Exception as e:
-        print(f"!!! VOICE ERROR: {e}")
+        print(f"Voice Error: {e}")
         return None
 
 # --- ROUTES ---
@@ -131,51 +126,45 @@ async def generate_speech(text):
 async def dashboard():
     chat_html = "".join([f'<div class="chat-msg {m["role"]}">{m["content"]}</div>' for m in convo_history[-10:]])
     emoji_map = {"idle": "😐", "happy": "😊", "excited": "🤩", "thinking": "🤔", "sleepy": "😴", "sad": "😢"}
-    
     return f"""
     <html>
         <head>
-            <title>Bit Pro Dashboard</title>
+            <title>Bit Control Center</title>
             <style>
                 :root {{ --primary: #00ff88; --bg: #0a0a0a; --card: #161616; }}
-                body {{ font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; margin: 0; display: flex; height: 100vh; }}
-                .sidebar {{ width: 300px; background: var(--card); padding: 20px; border-right: 1px solid #333; display: flex; flex-direction: column; }}
+                body {{ font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; margin: 0; display: flex; height: 100vh; overflow: hidden; }}
+                .sidebar {{ width: 320px; background: var(--card); padding: 20px; border-right: 1px solid #333; display: flex; flex-direction: column; overflow-y: auto; }}
                 .main {{ flex: 1; display: flex; flex-direction: column; padding: 20px; }}
                 .card {{ background: #222; border-radius: 15px; padding: 20px; margin-bottom: 20px; border: 1px solid #333; }}
-                h2 {{ color: var(--primary); margin-top: 0; font-size: 1.2em; }}
+                h2 {{ color: var(--primary); margin-top: 0; font-size: 1.2em; border-bottom: 1px solid #333; padding-bottom: 10px; }}
                 .emotion-view {{ font-size: 5em; text-align: center; margin: 10px 0; }}
                 .chat-area {{ flex: 1; background: #111; border-radius: 15px; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; border: 1px solid #222; }}
-                .chat-msg {{ padding: 10px 15px; border-radius: 10px; max-width: 80%; font-size: 0.9em; }}
-                .chat-msg.user {{ background: #333; align-self: flex-end; }}
-                .chat-msg.assistant {{ background: var(--primary); color: black; align-self: flex-start; }}
-                textarea {{ width: 100%; height: 100px; background: #000; color: #aaa; border: 1px solid #444; border-radius: 8px; padding: 10px; font-size: 0.8em; }}
-                button {{ background: var(--primary); color: black; border: none; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; }}
-                .status {{ font-size: 0.8em; color: #888; }}
+                .chat-msg {{ padding: 10px 15px; border-radius: 12px; max-width: 80%; font-size: 0.95em; line-height: 1.4; }}
+                .chat-msg.user {{ background: #333; align-self: flex-end; color: #eee; }}
+                .chat-msg.assistant {{ background: var(--primary); color: black; align-self: flex-start; font-weight: 500; }}
+                textarea {{ width: 100%; height: 100px; background: #000; color: #00ff88; border: 1px solid #444; border-radius: 8px; padding: 10px; font-family: monospace; }}
+                button {{ background: var(--primary); color: black; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 10px; }}
+                .label {{ color: #888; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px; }}
             </style>
             <meta http-equiv="refresh" content="5">
         </head>
         <body>
             <div class="sidebar">
-                <h2>🤖 Bit Status</h2>
+                <h2>🔋 System Stats</h2>
                 <div class="card">
-                    <div class="label">Current Emotion</div>
+                    <div class="label">User: {user_name}</div>
                     <div class="emotion-view">{emoji_map.get(current_emotion, "🤖")}</div>
-                    <div style="text-align:center; text-transform:uppercase; font-weight:bold; color:var(--primary)">{current_emotion}</div>
-                </div>
-                <div class="card">
-                    <div class="label">Remembered Name</div>
-                    <div style="font-size: 1.5em; margin-top:10px;">{user_name}</div>
+                    <div style="text-align:center; font-weight:bold; color:var(--primary)">{current_emotion.upper()}</div>
                 </div>
                 <form action="/update_prompt" method="post" class="card">
-                    <div class="label">System Personality</div>
+                    <div class="label">Personality Editor</div>
                     <textarea name="prompt">{system_prompt}</textarea>
-                    <button type="submit">Update Brain</button>
+                    <button type="submit">SAVE BRAIN</button>
                 </form>
             </div>
             <div class="main">
-                <h2>💬 Live Conversation</h2>
+                <h2>💬 Live Conversation History</h2>
                 <div class="chat-area">{chat_html}</div>
-                <p class="status">Dashboard auto-updates every 5 seconds</p>
             </div>
         </body>
     </html>
@@ -190,16 +179,14 @@ async def update_prompt(prompt: str = Form(...)):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    global convo_history, current_emotion
+    global last_interaction
     audio_data = bytearray()
     recording = False
     try:
         while True:
             try:
                 message = await websocket.receive()
-            except:
-                break # Connection closed
-                
+            except: break
             if "text" in message:
                 cmd = message["text"]
                 if cmd.startswith("QUERY:"):
@@ -208,9 +195,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                     voice = await generate_speech(reply)
                     if voice:
-                        await websocket.send_bytes(voice)
-                    else:
-                        print("Skipping binary send (voice generation failed)")
+                        for i in range(0, len(voice), 4096):
+                            await websocket.send_bytes(voice[i:i + 4096])
+                            await asyncio.sleep(0.01)
                 elif cmd == "START":
                     recording = True
                     audio_data = bytearray()
@@ -222,15 +209,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
                         voice = await generate_speech(reply)
                         if voice:
-                            await websocket.send_bytes(voice)
-                        else:
-                            print("Skipping binary send (voice generation failed)")
+                            for i in range(0, len(voice), 4096):
+                                await websocket.send_bytes(voice[i:i + 4096])
+                                await asyncio.sleep(0.01)
             elif "bytes" in message and recording:
                 audio_data.extend(message["bytes"])
-    except WebSocketDisconnect:
-        pass
-    finally:
-        print("WebSocket connection closed.")
+    except WebSocketDisconnect: pass
+    finally: print("Connection closed.")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
