@@ -16,12 +16,31 @@ app = FastAPI()
 # --- PERSISTENT STATE ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+# Memory Persistence
+MEMORY_FILE = "memory.json"
 
-convo_history = []
-user_name = "Friend"
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        with open(MEMORY_FILE, "r") as f:
+            return json.load(f)
+    return {"user_name": "Friend", "convo_history": []}
+
+def save_memory(name, history):
+    with open(MEMORY_FILE, "w") as f:
+        json.dump({"user_name": name, "convo_history": history[-10:]}, f)
+
+# Initial Load
+mem = load_memory()
+user_name = mem["user_name"]
+convo_history = mem["convo_history"]
 current_emotion = "idle"
+last_interaction = {"user": "None yet", "ai": "Waiting...", "emotion": "idle"}
+
 system_prompt = """You are 'Bit', a cute emotional desk robot. 
-Keep answers under 2 sentences. Format: {"emotion": "...", "text": "...", "user_name": "..."}"""
+Keep answers under 2 sentences. 
+If the user tells you their name, you MUST update the "user_name" field in your JSON.
+Format your response EXACTLY as JSON:
+{"emotion": "...", "text": "...", "user_name": "..."}"""
 
 # --- UTILS ---
 def clean_json(raw_res):
@@ -71,6 +90,16 @@ async def get_ai_response(text):
                     
                     convo_history.append({"role": "user", "content": text})
                     convo_history.append({"role": "assistant", "content": ai_text})
+                    
+                    # Update Dashboard
+                    global last_interaction
+                    last_interaction["user"] = text
+                    last_interaction["ai"] = ai_text
+                    last_interaction["emotion"] = current_emotion
+
+                    # Persist to disk
+                    save_memory(user_name, convo_history)
+                    
                     return ai_text, current_emotion
                 else:
                     print(f"Model {model} failed: {res_data}")
@@ -87,7 +116,7 @@ async def generate_speech(text):
     async for chunk in communicate.stream():
         if chunk["type"] == "audio": mp3_data.extend(chunk["data"])
     audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
-    audio = audio.set_frame_rate(24000).set_channels(1).set_sample_width(2)
+    audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
     return audio.raw_data
 
 # --- ROUTES ---
