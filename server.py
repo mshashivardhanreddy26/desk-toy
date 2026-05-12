@@ -111,13 +111,20 @@ async def get_ai_response(text):
     return "My circuits are a bit tangled!", "sad"
 
 async def generate_speech(text):
-    communicate = edge_tts.Communicate(text, "en-US-AndrewNeural", rate="-10%")
-    mp3_data = bytearray()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio": mp3_data.extend(chunk["data"])
-    audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
-    audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
-    return audio.raw_data
+    try:
+        print(f"Generating voice for: {text}")
+        communicate = edge_tts.Communicate(text, "en-US-AndrewNeural", rate="-10%")
+        mp3_data = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio": mp3_data.extend(chunk["data"])
+        
+        audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        print(f"Audio generated: {len(audio.raw_data)} bytes")
+        return audio.raw_data
+    except Exception as e:
+        print(f"!!! VOICE ERROR: {e}")
+        return None
 
 # --- ROUTES ---
 @app.get("/", response_class=HTMLResponse)
@@ -199,7 +206,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     text = cmd.replace("QUERY:", "").strip()
                     reply, emo = await get_ai_response(text)
                     await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
-                    await websocket.send_bytes(await generate_speech(reply))
+                    voice = await generate_speech(reply)
+                    if voice:
+                        await websocket.send_bytes(voice)
+                    else:
+                        print("Skipping binary send (voice generation failed)")
                 elif cmd == "START":
                     recording = True
                     audio_data = bytearray()
@@ -209,7 +220,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     if user_text.strip():
                         reply, emo = await get_ai_response(user_text)
                         await websocket.send_text(json.dumps({"text": reply, "emotion": emo}))
-                        await websocket.send_bytes(await generate_speech(reply))
+                        voice = await generate_speech(reply)
+                        if voice:
+                            await websocket.send_bytes(voice)
+                        else:
+                            print("Skipping binary send (voice generation failed)")
             elif "bytes" in message and recording:
                 audio_data.extend(message["bytes"])
     except WebSocketDisconnect:
