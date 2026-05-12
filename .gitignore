@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+sounds/
+*.wav
+*.mp3
+arduino_test/
+audio_test/
+test_api.py
+test_or.py
+test_soundjay.py
+download_sounds.py
+generate_sounds.py
+robot_esp32.ino
