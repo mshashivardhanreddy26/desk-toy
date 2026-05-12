@@ -122,9 +122,9 @@ async def generate_speech(text):
             print("VOICE-BOX: !!! FAILED (No data from Edge-TTS)")
             return None
             
-        # Convert to PCM at Native 24000Hz
+        # Convert to PCM at Stable 22050Hz
         audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
-        audio = audio.set_frame_rate(24000).set_channels(1).set_sample_width(2)
+        audio = audio.set_frame_rate(22050).set_channels(1).set_sample_width(2)
         print(f"VOICE-BOX: SUCCESS! Created {len(audio.raw_data)} bytes")
         return audio.raw_data
     except Exception as e:
