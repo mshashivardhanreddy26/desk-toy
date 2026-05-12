@@ -81,11 +81,11 @@ async def get_ai_response(text):
 
     try:
         async with httpx.AsyncClient() as client:
-            # SWITCHED TO GROQ FOR BRAIN (Llama 3 8B)
+            # LATEST GROQ MODEL (Llama 3.1 8B)
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-                json={"model": "llama3-8b-8192", "messages": messages},
+                json={"model": "llama-3.1-8b-instant", "messages": messages},
                 timeout=10.0
             )
             
