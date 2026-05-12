@@ -4,9 +4,10 @@ import json
 import wave
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from gtts import gTTS
+import edge_tts
 from pydub import AudioSegment
 import uvicorn
+import asyncio
 
 app = FastAPI()
 
@@ -57,48 +58,48 @@ def get_ai_response(text):
     except:
         return "I'm having trouble thinking."
 
+async def generate_speech(text):
+    # Use Edge-TTS for a very natural voice with -15% speed
+    voice = "en-US-AnaNeural" 
+    communicate = edge_tts.Communicate(text, voice, rate="-15%")
+    
+    mp3_data = bytearray()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            mp3_data.extend(chunk["data"])
+    
+    # Convert MP3 to PCM
+    audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
+    audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+    return audio.raw_data
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    print("ESP32 Connected")
     audio_data = bytearray()
     recording = False
 
     try:
         while True:
-            # Receive data (can be text command or binary audio)
             message = await websocket.receive()
-            
             if "text" in message:
                 command = message["text"]
                 if command == "START":
-                    print("Recording...")
                     recording = True
                     audio_data = bytearray()
                 elif command == "STOP":
-                    print("Processing...")
                     recording = False
                     user_text = transcribe_audio_groq(audio_data)
                     if user_text.strip():
                         ai_text = get_ai_response(user_text)
-                        
-                        # Generate TTS and convert to PCM
-                        tts = gTTS(text=ai_text, lang='en')
-                        mp3_fp = io.BytesIO()
-                        tts.write_to_fp(mp3_fp)
-                        mp3_fp.seek(0)
-                        
-                        audio = AudioSegment.from_file(mp3_fp, format="mp3")
-                        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
-                        
-                        # Send back raw PCM bytes
-                        await websocket.send_bytes(audio.raw_data)
+                        # Generate the voice response
+                        pcm_voice = await generate_speech(ai_text)
+                        await websocket.send_bytes(pcm_voice)
             
             elif "bytes" in message and recording:
                 audio_data.extend(message["bytes"])
-
     except WebSocketDisconnect:
-        print("ESP32 Disconnected")
+        pass
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

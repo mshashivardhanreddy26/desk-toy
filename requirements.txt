@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 httpx
-gtts
+edge-tts
 pydub
 websockets
