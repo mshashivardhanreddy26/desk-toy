@@ -16,7 +16,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 convo_history = []
-SYSTEM_PROMPT = "You are a cute emotional desk robot. Speak briefly (1-2 sentences."
+SYSTEM_PROMPT = "You are a cute emotional desk robot. Speak briefly (1-2 sentences)."
 
 # Global variables for the Dashboard
 last_interaction = {"user": "None yet", "ai": "Waiting for robot..."}
@@ -101,7 +101,7 @@ async def get_ai_response(text):
 async def generate_speech(text):
     # Use Edge-TTS for a very natural voice with -15% speed
     voice = "en-US-AnaNeural" 
-    communicate = edge_tts.Communicate(text, voice, rate="-15%")
+    communicate = edge_tts.Communicate(text, voice, rate="-40%")
     
     mp3_data = bytearray()
     async for chunk in communicate.stream():
