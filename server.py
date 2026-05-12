@@ -11,46 +11,30 @@ import asyncio
 
 app = FastAPI()
 
-# --- CONFIGURATION (Set these in Render's Environment Variables) ---
+# --- CONFIGURATION ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+# Memory State
 convo_history = []
-SYSTEM_PROMPT = "You are a cute emotional desk robot. Speak briefly (1-2 sentences)."
+user_name = "Friend"
+last_interaction = {"user": "None yet", "ai": "Waiting...", "emotion": "idle"}
 
-# Global variables for the Dashboard
-last_interaction = {"user": "None yet", "ai": "Waiting for robot..."}
+SYSTEM_PROMPT = """
+You are a cute emotional desk robot companion for children.
+Always answer briefly using simple language.
+Never answer NSFW or harmful questions.
+Be playful, warm, and emotionally expressive.
+Keep responses under 2 sentences.
 
-@app.get("/")
-async def root():
-    from fastapi.responses import HTMLResponse
-    html_content = f"""
-    <html>
-        <head>
-            <title>Robot Dashboard</title>
-            <style>
-                body {{ font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }}
-                .box {{ background: #1e1e1e; padding: 20px; border-radius: 15px; display: inline-block; min-width: 300px; border: 1px solid #333; }}
-                h1 {{ color: #00ff88; }}
-                .label {{ color: #888; font-size: 0.8em; margin-bottom: 5px; }}
-                .text {{ font-size: 1.2em; margin-bottom: 20px; color: #fff; }}
-            </style>
-            <meta http-equiv="refresh" content="3"> 
-        </head>
-        <body>
-            <h1>Robot Brain Dashboard</h1>
-            <div class="box">
-                <div class="label">YOU SAID:</div>
-                <div class="text">"{last_interaction['user']}"</div>
-                <hr style="border: 0; border-top: 1px solid #333;">
-                <div class="label">ROBOT REPLIED:</div>
-                <div class="text" style="color: #00ff88;">{last_interaction['ai']}</div>
-            </div>
-            <p style="color: #444; font-size: 0.8em;">Page auto-refreshes every 3 seconds</p>
-        </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+If the user tells you their name, remember it and use it in future responses to be more personal.
+Format your response exactly as JSON:
+{
+  "emotion": "one of: idle, happy, excited, thinking, sleepy, sad",
+  "text": "your spoken response",
+  "user_name": "If the user just told you their name, put it here. Otherwise, leave as null."
+}
+"""
 
 def transcribe_audio_groq(audio_bytes):
     try:
@@ -76,47 +60,105 @@ def transcribe_audio_groq(audio_bytes):
         return ""
 
 async def get_ai_response(text):
-    global convo_history
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}, *convo_history[-4:], {"role": "user", "content": text}]
+    global convo_history, user_name, last_interaction
+    
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Add a small reminder of the current user name
+    messages.append({"role": "system", "content": f"The current user's name is {user_name}."})
+    messages.extend(convo_history[-4:])
+    messages.append({"role": "user", "content": text})
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                json={"model": "openrouter/free", "messages": messages},
-                timeout=10.0
+                json={
+                    "model": "openrouter/free", 
+                    "messages": messages,
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=15.0
             )
-            if response.status_code != 200:
-                print(f"OpenRouter Error: {response.status_code} - {response.text}")
-                return "My brain feels a bit slow right now."
             
-            ai_text = response.json()['choices'][0]['message']['content']
+            # Parse the JSON response
+            res_json = response.json()['choices'][0]['message']['content']
+            data = json.loads(res_json)
+            
+            ai_text = data.get("text", "I'm happy to see you!")
+            emotion = data.get("emotion", "happy")
+            new_name = data.get("user_name")
+            
+            if new_name and new_name != "null":
+                user_name = new_name
+            
+            # Update History
             convo_history.append({"role": "user", "content": text})
             convo_history.append({"role": "assistant", "content": ai_text})
-            return ai_text
+            
+            # Update Dashboard
+            last_interaction["user"] = text
+            last_interaction["ai"] = ai_text
+            last_interaction["emotion"] = emotion
+            
+            return ai_text, emotion
+            
     except Exception as e:
-        print(f"AI Connection Error: {e}")
-        return "I'm having trouble connecting to my brain."
+        print(f"AI Error: {e}")
+        return "I'm having a little nap right now!", "sleepy"
 
 async def generate_speech(text):
-    # Use Edge-TTS for a very natural voice with -15% speed
     voice = "en-US-AnaNeural" 
     communicate = edge_tts.Communicate(text, voice, rate="-40%")
-    
     mp3_data = bytearray()
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
             mp3_data.extend(chunk["data"])
     
-    # Convert MP3 to PCM
     audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
     audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
     return audio.raw_data
 
+@app.get("/")
+async def root():
+    from fastapi.responses import HTMLResponse
+    emoji_map = {"idle": "😐", "happy": "😊", "excited": "🤩", "thinking": "🤔", "sleepy": "😴", "sad": "😢"}
+    emo_icon = emoji_map.get(last_interaction['emotion'], "🤖")
+    
+    html_content = f"""
+    <html>
+        <head>
+            <title>Bit Dashboard</title>
+            <style>
+                body {{ font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }}
+                .box {{ background: #1e1e1e; padding: 20px; border-radius: 15px; display: inline-block; min-width: 350px; border: 1px solid #333; }}
+                .emotion {{ font-size: 4em; margin-bottom: 10px; }}
+                h1 {{ color: #00ff88; margin-top: 0; }}
+                .label {{ color: #888; font-size: 0.8em; margin-bottom: 5px; text-transform: uppercase; }}
+                .text {{ font-size: 1.2em; margin-bottom: 20px; color: #fff; line-height: 1.4; }}
+                .name-tag {{ background: #00ff88; color: black; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 0.8em; }}
+            </style>
+            <meta http-equiv="refresh" content="3"> 
+        </head>
+        <body>
+            <div class="name-tag">Talking to: {user_name}</div>
+            <h1>Bit the Robot</h1>
+            <div class="box">
+                <div class="emotion">{emo_icon}</div>
+                <div class="label">You said:</div>
+                <div class="text">"{last_interaction['user']}"</div>
+                <hr style="border: 0; border-top: 1px solid #333; margin: 20px 0;">
+                <div class="label">Bit says:</div>
+                <div class="text" style="color: #00ff88;">{last_interaction['ai']}</div>
+            </div>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    global last_interaction
     audio_data = bytearray()
     recording = False
 
@@ -126,17 +168,13 @@ async def websocket_endpoint(websocket: WebSocket):
             if "text" in message:
                 command = message["text"]
                 if command.startswith("QUERY:"):
-                    # Direct text test (skips STT)
                     user_text = command.replace("QUERY:", "").strip()
-                    print(f"Test Query: {user_text}")
-                    ai_text = await get_ai_response(user_text)
+                    ai_text, emotion = await get_ai_response(user_text)
                     
-                    last_interaction["user"] = user_text
-                    last_interaction["ai"] = ai_text
-                    
-                    await websocket.send_text(ai_text)
+                    await websocket.send_text(json.dumps({"text": ai_text, "emotion": emotion}))
                     pcm_voice = await generate_speech(ai_text)
                     await websocket.send_bytes(pcm_voice)
+                    
                 elif command == "START":
                     recording = True
                     audio_data = bytearray()
@@ -144,16 +182,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     recording = False
                     user_text = transcribe_audio_groq(audio_data)
                     if user_text.strip():
-                        ai_text = await get_ai_response(user_text)
-                        
-                        # Update the Dashboard
-                        last_interaction["user"] = user_text
-                        last_interaction["ai"] = ai_text
-                        
-                        # 1. Send the text response back first
-                        await websocket.send_text(ai_text)
-                        
-                        # 2. Generate and send the voice response
+                        ai_text, emotion = await get_ai_response(user_text)
+                        # Send text + emotion as JSON to the ESP32
+                        await websocket.send_text(json.dumps({"text": ai_text, "emotion": emotion}))
                         pcm_voice = await generate_speech(ai_text)
                         await websocket.send_bytes(pcm_voice)
             
