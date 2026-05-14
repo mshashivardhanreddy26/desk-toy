@@ -27,13 +27,20 @@ app.add_middleware(
 
 # --- FIREBASE SETUP ---
 cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+cred_json_str = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON_STR")
+
 if not firebase_admin._apps:
-    if cred_path and os.path.exists(cred_path):
+    if cred_json_str:
+        print("[Firebase] Loading credentials from environment variable (STR)")
+        cred_dict = json.loads(cred_json_str)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+    elif cred_path and os.path.exists(cred_path):
         print(f"[Firebase] Loading credentials from file: {cred_path}")
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
     else:
-        print("[Firebase] No credentials file found, using default (ADC)")
+        print("[Firebase] No credentials found. Check your environment variables.")
         firebase_admin.initialize_app()
 
 def get_db():
