@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+firebase-admin
+httpx
+python-dotenv
+edge-tts
+websockets
+pydantic
+python-multipart
