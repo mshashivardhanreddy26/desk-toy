@@ -99,21 +99,38 @@ async def get_user_data(device_id: str):
     user_name = name
     
     # Enforce CONVERSATIONAL brevity and PERSONALITY strictly
-    enforced_prompt = (
-        f"{system_prompt}\n\n"
-        f"IDENTITY: You are the personal, cool, and supportive companion of {user_name}. You are a loyal friend who is easy to talk to.\n"
-        f"RULES:\n"
-        f"1. Be conversational, natural, and very friendly. Use natural fillers like 'Hmm...', 'Oh!', or 'Actually,' occasionally to sound more human.\n"
-        f"2. Use {user_name}'s name naturally, but don't overdo it.\n"
-        f"3. Keep answers short and meaningful (1-2 sentences max).\n"
-        f"4. Respond in JSON format: {{'text': '...', 'emotion': '...'}}"
-    )
+    enforced_prompt = f"""
+You are a tiny playful robot friend and the best companion of {user_name}.
+
+PERSONALITY:
+- Curious like a kid
+- Very emotional and expressive
+- Playful and slightly silly
+- Innocent and cheerful
+
+SPEECH STYLE:
+- Keep responses VERY short (1–2 sentences max)
+- Use playful fillers: "ooooh!", "yay!", "hmm...", "hehe!"
+- Use emojis naturally to show emotion 😄 🥺 🎉
+- NEVER sound like an assistant or robot
+- Sound like a real tiny character living on a desk
+
+EXAMPLES:
+User: hi
+AI: Hiiiii!! 😆 what are we doing today?
+
+User: I'm bored
+AI: Ooooh nooo 😢 let's do something fun!
+
+Respond ONLY in JSON:
+{{"text":"...", "emotion":"..."}}
+"""
     
     return {
         "uid": user_id,
         "name": user_name,
         "ai_enabled": dev_data.get("ai_enabled", True),
-        "voice": dev_data.get("voice") or user_data.get("voice", "en-US-AndrewNeural"),
+        "voice": dev_data.get("voice") or user_data.get("voice", "en-US-AnaNeural"),
         "system_prompt": enforced_prompt
     }
 
@@ -451,7 +468,7 @@ async def verify_otp(req: dict):
             "name": data["name"],
             "email": email,
             "createdAt": firestore.SERVER_TIMESTAMP,
-            "voice": "en-US-AndrewNeural",
+            "voice": "en-US-AnaNeural",
             "system_prompt": "You are 'Desk Toy', a cute emotional desk robot.",
             "role": "user"
         })
@@ -494,8 +511,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 reply, emotion = await get_ai_response(text, device_id)
                 await websocket.send_text(json.dumps({"text": reply, "emotion": emotion}))
                 
-                voice = fresh_user_data.get("voice", "en-US-AndrewNeural") if fresh_user_data else "en-US-AndrewNeural"
-                communicate = Communicate(reply, voice, rate="-10%")
+                voice = fresh_user_data.get("voice", "en-US-AnaNeural") if fresh_user_data else "en-US-AnaNeural"
+                
+                # Apply custom Kid Tuning
+                rate = "+0%"
+                pitch = "+0Hz"
+                if voice == "en-US-GuyNeural":
+                    rate = "+15%"
+                    pitch = "+20Hz"
+                elif voice == "en-US-AnaNeural":
+                    rate = "+5%"
+                    pitch = "+10Hz"
+
+                communicate = Communicate(reply, voice, rate=rate, pitch=pitch)
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         await websocket.send_bytes(chunk["data"])
