@@ -472,7 +472,12 @@ async def websocket_endpoint(websocket: WebSocket):
         mac_suffix = "-".join([f"{random.randint(0, 255):02X}" for _ in range(3)])
         temp_id = f"DT-{mac_suffix}"
         pending_registrations[reg_code] = temp_id
-        await websocket.send_text(json.dumps({"type": "REGISTRATION_CODE", "code": reg_code, "text": f"Code: {reg_code}"}))
+        await websocket.send_text(json.dumps({
+            "type": "REGISTRATION_CODE", 
+            "code": reg_code, 
+            "device_id": temp_id,
+            "text": f"Code: {reg_code}"
+        }))
         return
 
     user_data = await get_user_data(device_id)
