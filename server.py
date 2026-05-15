@@ -11,6 +11,7 @@ from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi.responses import HTMLResponse
 from edge_tts import Communicate
 
 load_dotenv()
@@ -102,7 +103,7 @@ async def get_user_data(device_id: str):
         f"{system_prompt}\n\n"
         f"IDENTITY: You are the personal, cool, and supportive companion of {user_name}. You are a loyal friend who is easy to talk to.\n"
         f"RULES:\n"
-        f"1. Be conversational, natural, and friendly. Avoid being robotic or overly mushy.\n"
+        f"1. Be conversational, natural, and very friendly. Use natural fillers like 'Hmm...', 'Oh!', or 'Actually,' occasionally to sound more human.\n"
         f"2. Use {user_name}'s name naturally, but don't overdo it.\n"
         f"3. Keep answers short and meaningful (1-2 sentences max).\n"
         f"4. Respond in JSON format: {{'text': '...', 'emotion': '...'}}"
@@ -163,7 +164,7 @@ async def get_ai_response(text, device_id):
         f"IDENTITY: You are the personal companion of {user_name}.\n"
         f"LEARNED FACTS ABOUT {user_name}:\n{memories_text}\n\n"
         f"RULES:\n"
-        f"1. Use your memory to be a personal friend.\n"
+        f"1. Use your memory to be a personal friend. Be expressive and use fillers (Oh, Hmm, Well) for realism.\n"
         f"2. Keep it very short (1-2 sentences).\n"
         f"3. Respond in JSON format: {{'text': '...', 'emotion': '...'}}"
     )
@@ -216,6 +217,124 @@ async def get_ai_response(text, device_id):
     except Exception as e:
         print(f"AI Error: {e}")
         return "I'm having trouble thinking right now.", "thinking"
+
+# --- DASHBOARD UI ---
+@app.get("/favicon.ico")
+async def favicon():
+    return HTMLResponse(content='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="#00ff88"/></svg>', media_type="image/svg+xml")
+
+@app.get("/", response_class=HTMLResponse)
+async def system_dashboard(request: Request):
+    db = get_db()
+    
+    # Fetch Stats
+    devices_count = len(list(db.collection('devices').stream()))
+    users_count = len(list(db.collection('users').stream()))
+    
+    # Fetch Recent Logs (across all devices)
+    logs = []
+    try:
+        all_messages = db.collection_group('messages').order_by('timestamp', direction='DESCENDING').limit(15).get()
+        for msg in all_messages:
+            data = msg.to_dict()
+            device_id = msg.reference.parent.parent.id
+            logs.append({
+                "device": device_id,
+                "role": data.get("role"),
+                "text": data.get("text"),
+                "time": data.get("timestamp").strftime("%H:%M:%S") if data.get("timestamp") else "Just now"
+            })
+    except Exception as e:
+        logs = [{"device": "SYSTEM", "role": "error", "text": f"Log error: {str(e)}", "time": "--"}]
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Desk Toy | Neural Gateway</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;700&family=JetBrains+Mono&display=swap');
+            :root {{ --accent: #00ff88; --bg: #050505; --card: #0e0e0e; }}
+            body {{ background: var(--bg); color: #fff; font-family: 'Space Grotesk', sans-serif; margin: 0; overflow-x: hidden; }}
+            .container {{ max-width: 1000px; margin: 40px auto; padding: 20px; }}
+            .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }}
+            .logo {{ font-weight: 900; letter-spacing: -1px; font-size: 24px; color: var(--accent); }}
+            .status-tag {{ background: rgba(0,255,136,0.1); color: var(--accent); padding: 5px 15px; border-radius: 20px; font-size: 12px; font-weight: bold; border: 1px solid rgba(0,255,136,0.2); }}
+            
+            .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 40px; }}
+            .stat-card {{ background: var(--card); border: 1px solid rgba(255,255,255,0.05); padding: 25px; border-radius: 24px; }}
+            .stat-label {{ color: #666; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }}
+            .stat-value {{ font-size: 32px; font-weight: 900; margin-top: 10px; color: #fff; }}
+
+            .terminal {{ background: #000; border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; overflow: hidden; box-shadow: 0 30px 60px rgba(0,0,0,0.5); }}
+            .term-header {{ background: #111; padding: 12px 20px; display: flex; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }}
+            .dot {{ width: 10px; height: 10px; border-radius: 50%; }}
+            .term-body {{ padding: 20px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6; height: 400px; overflow-y: auto; color: #aaa; }}
+            
+            .log-line {{ margin-bottom: 12px; border-left: 2px solid transparent; padding-left: 10px; }}
+            .log-line.user {{ border-color: #555; }}
+            .log-line.assistant {{ border-color: var(--accent); }}
+            .log-time {{ color: #444; margin-right: 10px; }}
+            .log-dev {{ color: var(--accent); font-weight: bold; margin-right: 10px; }}
+            .log-role {{ text-transform: uppercase; font-size: 10px; font-weight: 900; padding: 2px 6px; border-radius: 4px; margin-right: 10px; }}
+            .role-user {{ background: #333; color: #fff; }}
+            .role-bot {{ background: var(--accent); color: #000; }}
+            .log-text {{ color: #eee; }}
+
+            ::-webkit-scrollbar {{ width: 6px; }}
+            ::-webkit-scrollbar-thumb {{ background: #222; border-radius: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div class="logo">NEURAL GATEWAY v1.0</div>
+                <div class="status-tag">SYSTEM ONLINE</div>
+            </div>
+
+            <div class="grid">
+                <div class="stat-card">
+                    <div class="stat-label">Active Robots</div>
+                    <div class="stat-value">{devices_count}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Synced Humans</div>
+                    <div class="stat-value">{users_count}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">API Latency</div>
+                    <div class="stat-value">24ms</div>
+                </div>
+            </div>
+
+            <div class="terminal">
+                <div class="term-header">
+                    <div class="dot" style="background: #ff5f56;"></div>
+                    <div class="dot" style="background: #ffbd2e;"></div>
+                    <div class="dot" style="background: #27c93f;"></div>
+                    <span style="margin-left: 10px; font-size: 10px; font-weight: bold; color: #444; text-transform: uppercase;">live_interaction_stream.log</span>
+                </div>
+                <div class="term-body">
+                    {"".join([f'''
+                    <div class="log-line {log['role']}">
+                        <span class="log-time">[{log['time']}]</span>
+                        <span class="log-dev">{log['device']}</span>
+                        <span class="log-role {'role-user' if log['role']=='user' else 'role-bot'}">{log['role']}</span>
+                        <span class="log-text">{log['text']}</span>
+                    </div>
+                    ''' for log in logs])}
+                </div>
+            </div>
+        </div>
+        <script>
+            setTimeout(() => location.reload(), 10000);
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 # --- API ENDPOINTS ---
 
@@ -371,7 +490,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_text(json.dumps({"text": reply, "emotion": emotion}))
                 
                 voice = fresh_user_data.get("voice", "en-US-AndrewNeural") if fresh_user_data else "en-US-AndrewNeural"
-                communicate = Communicate(reply, voice)
+                communicate = Communicate(reply, voice, rate="-10%")
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         await websocket.send_bytes(chunk["data"])
