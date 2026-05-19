@@ -463,6 +463,31 @@ async def verify_otp(req: dict):
         print(f"Auth Error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+async def handle_user_input(text: str, device_id: str, websocket: WebSocket, fresh_user_data: dict):
+    reply, emotion = await get_ai_response(text, device_id)
+    await websocket.send_text(json.dumps({"text": reply, "emotion": emotion}))
+    
+    voice = fresh_user_data.get("voice", "en-US-AnaNeural") if fresh_user_data else "en-US-AnaNeural"
+    
+    # Apply custom Kid Tuning
+    rate = "+0%"
+    pitch = "+0Hz"
+    if voice == "en-US-GuyNeural":
+        rate = "+15%"
+        pitch = "+20Hz"
+    elif voice == "en-US-AnaNeural":
+        rate = "+5%"
+        pitch = "+10Hz"
+
+    communicate = Communicate(reply, voice, rate=rate, pitch=pitch)
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data = chunk["data"]
+            chunk_size = 1024
+            for i in range(0, len(audio_data), chunk_size):
+                await websocket.send_bytes(audio_data[i:i+chunk_size])
+                await asyncio.sleep(0.01) # Yield to prevent buffer overflow
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     device_id = websocket.query_params.get("device_id", "DEFAULT")
@@ -486,32 +511,57 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=4003)
         return
     
+    audio_buffer = bytearray()
+
     try:
         while True:
-            data = await websocket.receive_text()
-            if data.startswith("QUERY:"):
-                text = data[6:]
-                fresh_user_data = await get_user_data(device_id)
-                reply, emotion = await get_ai_response(text, device_id)
-                await websocket.send_text(json.dumps({"text": reply, "emotion": emotion}))
-                
-                voice = fresh_user_data.get("voice", "en-US-AnaNeural") if fresh_user_data else "en-US-AnaNeural"
-                
-                # Apply custom Kid Tuning
-                rate = "+0%"
-                pitch = "+0Hz"
-                if voice == "en-US-GuyNeural":
-                    rate = "+15%"
-                    pitch = "+20Hz"
-                elif voice == "en-US-AnaNeural":
-                    rate = "+5%"
-                    pitch = "+10Hz"
-
-                communicate = Communicate(reply, voice, rate=rate, pitch=pitch)
-                async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        await websocket.send_bytes(chunk["data"])
-    except: pass
+            message = await websocket.receive()
+            
+            if "text" in message:
+                data = message["text"]
+                if data == "START":
+                    audio_buffer = bytearray()
+                    print(f"[{device_id}] Started recording audio...")
+                elif data == "STOP":
+                    print(f"[{device_id}] Stopped recording audio. Processing {len(audio_buffer)} bytes...")
+                    if len(audio_buffer) > 0:
+                        import wave, io
+                        wav_io = io.BytesIO()
+                        with wave.open(wav_io, 'wb') as wav_file:
+                            wav_file.setnchannels(1)
+                            wav_file.setsampwidth(2)
+                            wav_file.setframerate(22050)
+                            wav_file.writeframes(audio_buffer)
+                        wav_bytes = wav_io.getvalue()
+                        
+                        GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
+                                req_data = {"model": "whisper-large-v3", "response_format": "json", "language": "en"}
+                                res = await client.post(
+                                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                                    headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                                    data=req_data,
+                                    files=files,
+                                    timeout=15.0
+                                )
+                                recognized_text = res.json().get("text", "").strip()
+                                print(f"[{device_id}] Recognized: {recognized_text}")
+                                
+                                if recognized_text:
+                                    fresh_user_data = await get_user_data(device_id)
+                                    await handle_user_input(recognized_text, device_id, websocket, fresh_user_data)
+                        except Exception as e:
+                            print(f"[{device_id}] Audio processing error: {e}")
+                elif data.startswith("QUERY:"):
+                    text = data[6:]
+                    fresh_user_data = await get_user_data(device_id)
+                    await handle_user_input(text, device_id, websocket, fresh_user_data)
+            elif "bytes" in message:
+                audio_buffer.extend(message["bytes"])
+    except Exception as e:
+        print(f"[{device_id}] Websocket disconnected or error: {e}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
