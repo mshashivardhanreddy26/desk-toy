@@ -486,14 +486,35 @@ async def handle_user_input(text: str, device_id: str, websocket: WebSocket, fre
             mp3_data.extend(chunk["data"])
             
     if mp3_data:
+        # Save local MP3 copy
+        try:
+            with open("response.mp3", "wb") as f:
+                f.write(mp3_data)
+            print("[TTS] Saved response.mp3 locally.")
+        except Exception as e:
+            print(f"[TTS] Error saving response.mp3: {e}")
+
         import miniaudio
         try:
-            decoded = miniaudio.decode(bytes(mp3_data), nchannels=1, sample_rate=22050, output_format=miniaudio.SampleFormat.SIGNED_16BIT)
+            decoded = miniaudio.decode(bytes(mp3_data), nchannels=1, sample_rate=22050, output_format=miniaudio.SampleFormat.SIGNED16)
             pcm_bytes = decoded.samples.tobytes()
-            chunk_size = 1024
+            
+            # Save local WAV copy
+            try:
+                import wave
+                with wave.open("response.wav", "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)  # 16-bit
+                    wav_file.setframerate(22050)
+                    wav_file.writeframes(pcm_bytes)
+                print("[TTS] Saved response.wav locally.")
+            except Exception as e:
+                print(f"[TTS] Error saving response.wav: {e}")
+
+            chunk_size = 4096
             for i in range(0, len(pcm_bytes), chunk_size):
                 await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
-                await asyncio.sleep(0.02) # Yield to prevent buffer overflow
+                await asyncio.sleep(0.05) # Yield to prevent buffer overflow, adjusted for Windows timer resolution
         except Exception as e:
             print(f"Audio decode error: {e}")
 
@@ -567,6 +588,20 @@ async def websocket_endpoint(websocket: WebSocket):
                     text = data[6:]
                     fresh_user_data = await get_user_data(device_id)
                     await handle_user_input(text, device_id, websocket, fresh_user_data)
+                elif data == "PLAY_TEST":
+                    print(f"[{device_id}] Starting audio test stream...")
+                    try:
+                        import wave
+                        with wave.open("response.wav", "rb") as wav_file:
+                            pcm_bytes = wav_file.readframes(wav_file.getnframes())
+                        chunk_size = 4096
+                        print(f"[{device_id}] Streaming {len(pcm_bytes)} bytes of test audio...")
+                        for i in range(0, len(pcm_bytes), chunk_size):
+                            await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                            await asyncio.sleep(0.05)
+                        print(f"[{device_id}] Finished streaming test audio.")
+                    except Exception as e:
+                        print(f"Test stream error: {e}")
             elif message.get("bytes") is not None:
                 audio_buffer.extend(message["bytes"])
     except Exception as e:
