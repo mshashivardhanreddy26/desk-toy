@@ -7,3 +7,4 @@ edge-tts
 websockets
 pydantic
 python-multipart
+miniaudio
