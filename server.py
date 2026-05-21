@@ -480,13 +480,22 @@ async def handle_user_input(text: str, device_id: str, websocket: WebSocket, fre
         pitch = "+10Hz"
 
     communicate = Communicate(reply, voice, rate=rate, pitch=pitch)
+    mp3_data = bytearray()
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
-            audio_data = chunk["data"]
+            mp3_data.extend(chunk["data"])
+            
+    if mp3_data:
+        import miniaudio
+        try:
+            decoded = miniaudio.decode(bytes(mp3_data), nchannels=1, sample_rate=22050, output_format=miniaudio.SampleFormat.SIGNED_16BIT)
+            pcm_bytes = decoded.samples.tobytes()
             chunk_size = 1024
-            for i in range(0, len(audio_data), chunk_size):
-                await websocket.send_bytes(audio_data[i:i+chunk_size])
-                await asyncio.sleep(0.01) # Yield to prevent buffer overflow
+            for i in range(0, len(pcm_bytes), chunk_size):
+                await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                await asyncio.sleep(0.02) # Yield to prevent buffer overflow
+        except Exception as e:
+            print(f"Audio decode error: {e}")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -517,7 +526,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             message = await websocket.receive()
             
-            if "text" in message:
+            if message.get("text") is not None:
                 data = message["text"]
                 if data == "START":
                     audio_buffer = bytearray()
@@ -558,7 +567,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     text = data[6:]
                     fresh_user_data = await get_user_data(device_id)
                     await handle_user_input(text, device_id, websocket, fresh_user_data)
-            elif "bytes" in message:
+            elif message.get("bytes") is not None:
                 audio_buffer.extend(message["bytes"])
     except Exception as e:
         print(f"[{device_id}] Websocket disconnected or error: {e}")
