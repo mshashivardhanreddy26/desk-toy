@@ -511,10 +511,10 @@ async def handle_user_input(text: str, device_id: str, websocket: WebSocket, fre
             except Exception as e:
                 print(f"[TTS] Error saving response.wav: {e}")
 
-            chunk_size = 4096
+            chunk_size = 1024
             for i in range(0, len(pcm_bytes), chunk_size):
                 await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
-                await asyncio.sleep(0.05) # Yield to prevent buffer overflow, adjusted for Windows timer resolution
+                await asyncio.sleep(0.01) # Yield to prevent buffer overflow
         except Exception as e:
             print(f"Audio decode error: {e}")
 
@@ -594,11 +594,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         import wave
                         with wave.open("response.wav", "rb") as wav_file:
                             pcm_bytes = wav_file.readframes(wav_file.getnframes())
-                        chunk_size = 4096
+                        chunk_size = 1024
                         print(f"[{device_id}] Streaming {len(pcm_bytes)} bytes of test audio...")
                         for i in range(0, len(pcm_bytes), chunk_size):
                             await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
-                            await asyncio.sleep(0.05)
+                            await asyncio.sleep(0.01)
                         print(f"[{device_id}] Finished streaming test audio.")
                     except Exception as e:
                         print(f"Test stream error: {e}")
