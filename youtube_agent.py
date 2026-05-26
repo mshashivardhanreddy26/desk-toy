@@ -1,8 +1,12 @@
 import os
 import sys
 import tempfile
+import base64
+from dotenv import load_dotenv
 from yt_dlp import YoutubeDL
 from pydub import AudioSegment
+
+load_dotenv()
 
 # Setup ffmpeg paths
 try:
@@ -11,6 +15,28 @@ try:
     print("[YouTube Agent] ffmpeg paths loaded via static-ffmpeg.")
 except Exception as e:
     print(f"[YouTube Agent] Error loading static-ffmpeg paths: {e}")
+
+# Decode Base64 cookies if present in the environment
+cookies_b64 = os.getenv("YOUTUBE_COOKIES_BASE64")
+if cookies_b64:
+    try:
+        cookies_data = base64.b64decode(cookies_b64.strip()).decode('utf-8')
+        
+        # Write to cookies.txt in CWD
+        with open("cookies.txt", "w", encoding="utf-8", newline="\n") as f:
+            f.write(cookies_data)
+            
+        # Also write to backend/cookies.txt if backend directory exists and we are in root CWD
+        if os.path.exists("backend") and os.path.isdir("backend"):
+            try:
+                with open("backend/cookies.txt", "w", encoding="utf-8", newline="\n") as f:
+                    f.write(cookies_data)
+            except Exception:
+                pass
+                
+        print("[YouTube Agent] Decoded and wrote cookies.txt successfully from environment variable.")
+    except Exception as e:
+        print(f"[YouTube Agent] Error decoding/writing cookies.txt from environment: {e}")
 
 def download_youtube_audio(query: str, output_base: str):
     """
