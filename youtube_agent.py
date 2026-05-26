@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 from yt_dlp import YoutubeDL
 from pydub import AudioSegment
@@ -28,9 +29,10 @@ def download_youtube_audio(query: str, output_base: str):
     if cookie_file:
         sources.append(('file', cookie_file))
         
-    # Local browser fallbacks
-    for b in ['chrome', 'edge', 'firefox', 'brave', 'safari', 'opera']:
-        sources.append(('browser', b))
+    # Local browser fallbacks (skip on Linux/Render to avoid noisy unsupported platform / no database errors)
+    if not sys.platform.startswith('linux'):
+        for b in ['chrome', 'edge', 'firefox', 'brave', 'safari', 'opera']:
+            sources.append(('browser', b))
         
     sources.append(('none', None))
     
@@ -39,6 +41,11 @@ def download_youtube_audio(query: str, output_base: str):
         ['ios', 'android', 'mweb'], 
         ['default']
     ]
+    
+    # Configure a modern user agent (allows matching cookies and avoiding basic anti-bot blocks)
+    # We default to Firefox to match the exported Firefox cookies.txt session
+    default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
+    user_agent = os.getenv("YT_DLP_USER_AGENT", default_ua)
     
     for source_type, val in sources:
         for clients in client_options:
@@ -49,6 +56,7 @@ def download_youtube_audio(query: str, output_base: str):
                 'no_warnings': True,
                 'default_search': 'ytsearch',
                 'outtmpl': output_base + '.%(ext)s',
+                'user_agent': user_agent,
                 'extractor_args': {
                     'youtube': {
                         'player_client': clients
