@@ -434,6 +434,38 @@ async def user_chat(req: ChatRequest):
     reply, emotion, action, song = await get_ai_response(req.text, req.device_id)
     return {"status": "success", "reply": reply, "emotion": emotion, "action": action, "song": song}
 
+@app.get("/play")
+async def play_song_direct(song: str):
+    if not song:
+        raise HTTPException(status_code=400, detail="Missing song parameter")
+    try:
+        try:
+            from backend.youtube_agent import get_youtube_pcm
+        except ImportError:
+            from youtube_agent import get_youtube_pcm
+
+        loop = asyncio.get_running_loop()
+        pcm_bytes, title = await loop.run_in_executor(None, get_youtube_pcm, song)
+        
+        import wave, io
+        wav_io = io.BytesIO()
+        with wave.open(wav_io, 'wb') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(22050)
+            wav_file.writeframes(pcm_bytes)
+        
+        wav_io.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            wav_io,
+            media_type="audio/wav",
+            headers={"Content-Disposition": f"inline; filename=\"{title}.wav\""}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @app.delete("/admin/delete-user/{uid}")
 async def delete_user_admin(uid: str):
