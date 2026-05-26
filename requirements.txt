@@ -8,3 +8,6 @@ websockets
 pydantic
 python-multipart
 miniaudio
+yt-dlp
+pydub
+static-ffmpeg
