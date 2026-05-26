@@ -16,27 +16,59 @@ def download_youtube_audio(query: str, output_base: str):
     Search YouTube for a song and download the best audio format.
     Returns: (actual_file_path, song_title)
     """
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-        'default_search': 'ytsearch',
-        'outtmpl': output_base + '.%(ext)s',
-    }
-    with YoutubeDL(ydl_opts) as ydl:
-        # Search and download the first matching video
-        info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-        if 'entries' in info and len(info['entries']) > 0:
-            entry = info['entries'][0]
-            ext = entry.get('ext', 'webm')
-            actual_file = f"{output_base}.{ext}"
-            return actual_file, entry.get('title', 'Unknown')
-        elif 'id' in info:
-            ext = info.get('ext', 'webm')
-            actual_file = f"{output_base}.{ext}"
-            return actual_file, info.get('title', 'Unknown')
-    return None, None
+    # Check if a local cookies.txt file is present (essential for Render/VPS deployment)
+    cookie_paths = ["cookies.txt", "backend/cookies.txt", "../cookies.txt"]
+    cookie_file = None
+    for cp in cookie_paths:
+        if os.path.exists(cp):
+            cookie_file = cp
+            break
+            
+    sources = []
+    if cookie_file:
+        sources.append(('file', cookie_file))
+        
+    # Local browser fallbacks
+    for b in ['chrome', 'edge', 'firefox', 'brave', 'safari', 'opera']:
+        sources.append(('browser', b))
+        
+    sources.append(('none', None))
+    
+    for source_type, val in sources:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'default_search': 'ytsearch',
+            'outtmpl': output_base + '.%(ext)s',
+        }
+        if source_type == 'file':
+            ydl_opts['cookiefile'] = val
+            print(f"[YouTube Agent] Trying to search/download using cookies file: {val}")
+        elif source_type == 'browser':
+            ydl_opts['cookiesfrombrowser'] = (val,)
+            print(f"[YouTube Agent] Trying to search/download using cookies from: {val}")
+        else:
+            print("[YouTube Agent] Trying to search/download without cookies (fallback)")
+            
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                if 'entries' in info and len(info['entries']) > 0:
+                    entry = info['entries'][0]
+                    ext = entry.get('ext', 'webm')
+                    actual_file = f"{output_base}.{ext}"
+                    return actual_file, entry.get('title', 'Unknown')
+                elif 'id' in info:
+                    ext = info.get('ext', 'webm')
+                    actual_file = f"{output_base}.{ext}"
+                    return actual_file, info.get('title', 'Unknown')
+        except Exception as e:
+            print(f"[YouTube Agent] Failed with {source_type} '{val}': {e}")
+            continue
+            
+    raise Exception("Failed to download audio from YouTube. All cookie sources and browser fallbacks failed.")
 
 def get_youtube_pcm(query: str):
     """
