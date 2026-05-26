@@ -141,6 +141,63 @@ async def extract_memories(device_id, user_text, ai_text):
                 print(f"[MEMORY] Learned new fact: {fact}")
     except: pass
 
+def parse_ai_json(raw_content: str):
+    import json, re
+    
+    ai_text = ""
+    emotion = "happy"
+    action = None
+    song = None
+    
+    try:
+        json_str = raw_content.strip()
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[1].split("```")[0].strip()
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1].split("```")[0].strip()
+            
+        if not json_str.startswith("{"):
+            start = json_str.find("{")
+            end = json_str.rfind("}")
+            if start != -1 and end != -1:
+                json_str = json_str[start:end+1]
+                
+        data = json.loads(json_str)
+        ai_text = data.get("text", "")
+        emotion = data.get("emotion", "happy")
+        action = data.get("action")
+        song = data.get("song")
+        return ai_text, emotion, action, song
+    except Exception as e:
+        print(f"[AI Parse] Standard JSON load failed: {e}")
+        
+    try:
+        match_text = re.search(r'["\']text["\']\s*:\s*["\'](.*?)["\']', raw_content, re.DOTALL)
+        if match_text:
+            ai_text = match_text.group(1)
+        else:
+            ai_text = re.sub(r'[\{\}[\]\'"]', '', raw_content).strip()
+            
+        ai_text = ai_text.replace("\\'", "'").replace('\\"', '"').replace('\\n', ' ').strip()
+        
+        match_emo = re.search(r'["\']emotion["\']\s*:\s*["\'](.*?)["\']', raw_content)
+        if match_emo:
+            emotion = match_emo.group(1)
+            
+        match_act = re.search(r'["\']action["\']\s*:\s*["\'](.*?)["\']', raw_content)
+        if match_act:
+            action = match_act.group(1)
+            
+        match_song = re.search(r'["\']song["\']\s*:\s*["\'](.*?)["\']', raw_content)
+        if match_song:
+            song = match_song.group(1)
+            
+    except Exception as ex:
+        print(f"[AI Parse] Regex fallback error: {ex}")
+        ai_text = raw_content
+        
+    return ai_text, emotion, action, song
+
 async def get_ai_response(text, device_id):
     user_data = await get_user_data(device_id)
     if not user_data: return "I'm lost.", "sad", None, None
@@ -168,7 +225,7 @@ async def get_ai_response(text, device_id):
         f"1. Use your memory to be a personal friend. Be expressive and use fillers (Oh, Hmm, Well) for realism.\n"
         f"2. Keep it very short (1-2 sentences).\n"
         f"3. Respond in JSON format: {{\"text\": \"...\", \"emotion\": \"...\"}}.\n"
-        f"4. If the user asks you to play a song/music, you MUST include the fields `\"action\": \"play_music\"` and `\"song\": \"<song name>\"` in the JSON. Otherwise, do not include action and song fields. Example: {{\"text\": \"Sure! Playing Blinding Lights for you!\", \"emotion\": \"happy\", \"action\": \"play_music\", \"song\": \"Blinding Lights\"}}."
+        f"4. If the user asks you to play a song or music, you MUST include the fields `\"action\": \"play_music\"` and `\"song\": \"<song name>\"` in the JSON. Otherwise, do not include action and song fields. Example: {{\"text\": \"Sure! Playing Blinding Lights for you!\", \"emotion\": \"happy\", \"action\": \"play_music\", \"song\": \"Blinding Lights\"}}."
     )
 
     # 3. Fetch Recent Conversation History (Short-term context)
@@ -196,55 +253,7 @@ async def get_ai_response(text, device_id):
             data = res.json()
             raw_content = data['choices'][0]['message']['content']
             
-            ai_text = raw_content
-            emotion = "happy"
-            action = None
-            song = None
-            try:
-                # Find JSON block inside raw_content if markdown or other text is present
-                json_str = raw_content.strip()
-                if "```json" in json_str:
-                    json_str = json_str.split("```json")[1].split("```")[0].strip()
-                elif "```" in json_str:
-                    json_str = json_str.split("```")[1].split("```")[0].strip()
-                
-                # Locate outermost curly braces
-                if not json_str.startswith("{"):
-                    start = json_str.find("{")
-                    end = json_str.rfind("}")
-                    if start != -1 and end != -1:
-                        json_str = json_str[start:end+1]
-                
-                parsed_data = json.loads(json_str)
-                ai_text = parsed_data.get("text", "")
-                emotion = parsed_data.get("emotion", "happy")
-                action = parsed_data.get("action")
-                song = parsed_data.get("song")
-            except Exception as e:
-                print(f"[AI Parse] JSON parse failed, falling back to regex: {e}")
-                try:
-                    import re
-                    text_pattern = r'["\']text["\']\s*:\s*["\'](.*?)["\']'
-                    match = re.search(text_pattern, raw_content, re.DOTALL)
-                    if match: 
-                        ai_text = match.group(1)
-                    else:
-                        ai_text = raw_content
-                    ai_text = ai_text.replace("\\'", "'").replace('\\"', '"').replace('\\n', ' ').strip()
-                    
-                    emotion_pattern = r'["\']emotion["\']\s*:\s*["\'](.*?)["\']'
-                    e_match = re.search(emotion_pattern, raw_content)
-                    if e_match: emotion = e_match.group(1)
-                    
-                    action_pattern = r'["\']action["\']\s*:\s*["\'](.*?)["\']'
-                    act_match = re.search(action_pattern, raw_content)
-                    if act_match: action = act_match.group(1)
-                    
-                    song_pattern = r'["\']song["\']\s*:\s*["\'](.*?)["\']'
-                    song_match = re.search(song_pattern, raw_content)
-                    if song_match: song = song_match.group(1)
-                except Exception as ex:
-                    print(f"[AI Parse] Regex fallback failed: {ex}")
+            ai_text, emotion, action, song = parse_ai_json(raw_content)
             
             await save_live_message(device_id, "assistant", ai_text, emotion)
             
@@ -564,7 +573,11 @@ async def play_audio_stream(reply: str, voice: str, action: str, song: str, webs
                     chunk_size = 1024
                     chunk_delay = chunk_size / 44100.0  # Real-time pacing (1024 bytes at 22050Hz Mono 16-bit is 23.2ms)
                     for i in range(0, len(pcm_bytes), chunk_size):
-                        await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                        try:
+                            await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                        except Exception as send_err:
+                            print(f"[{device_id}] WebSocket send failed during TTS: {send_err}")
+                            break
                         await asyncio.sleep(chunk_delay)
                 except asyncio.CancelledError:
                     print(f"[{device_id}] Playback task cancelled during TTS stream.")
@@ -587,14 +600,22 @@ async def play_audio_stream(reply: str, voice: str, action: str, song: str, webs
                 pcm_bytes, title = await loop.run_in_executor(None, get_youtube_pcm, song)
                 
                 # Send update to device/frontend
-                await websocket.send_text(json.dumps({"text": f"Playing: {title}", "emotion": "happy", "playing_music": True}))
+                try:
+                    await websocket.send_text(json.dumps({"text": f"Playing: {title}", "emotion": "happy", "playing_music": True}))
+                except Exception as send_err:
+                    print(f"[{device_id}] Failed to send playing metadata: {send_err}")
+                    return
                 
                 # Stream the PCM bytes
                 chunk_size = 2048
                 chunk_delay = chunk_size / 44100.0  # Real-time pacing (2048 bytes is 46.4ms)
                 print(f"[{device_id}] Streaming YouTube song '{title}' ({len(pcm_bytes)} bytes) to device...")
                 for i in range(0, len(pcm_bytes), chunk_size):
-                    await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                    try:
+                        await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                    except Exception as send_err:
+                        print(f"[{device_id}] WebSocket send failed during YouTube stream: {send_err}")
+                        break
                     await asyncio.sleep(chunk_delay)
                 print(f"[{device_id}] Finished streaming song '{title}'")
             except asyncio.CancelledError:
@@ -614,7 +635,11 @@ async def play_audio_stream(reply: str, voice: str, action: str, song: str, webs
 
 async def handle_user_input(text: str, device_id: str, websocket: WebSocket, fresh_user_data: dict):
     reply, emotion, action, song = await get_ai_response(text, device_id)
-    await websocket.send_text(json.dumps({"text": reply, "emotion": emotion, "action": action, "song": song}))
+    try:
+        await websocket.send_text(json.dumps({"text": reply, "emotion": emotion, "action": action, "song": song}))
+    except Exception as send_err:
+        print(f"[{device_id}] Failed to send user input response: {send_err}")
+        return
     
     # Cancel any active audio playback first
     cancel_device_playback(device_id)
@@ -635,12 +660,15 @@ async def websocket_endpoint(websocket: WebSocket):
         mac_suffix = "-".join([f"{random.randint(0, 255):02X}" for _ in range(3)])
         temp_id = f"DT-{mac_suffix}"
         pending_registrations[reg_code] = temp_id
-        await websocket.send_text(json.dumps({
-            "type": "REGISTRATION_CODE", 
-            "code": reg_code, 
-            "device_id": temp_id,
-            "text": f"Code: {reg_code}"
-        }))
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "REGISTRATION_CODE", 
+                "code": reg_code, 
+                "device_id": temp_id,
+                "text": f"Code: {reg_code}"
+            }))
+        except Exception as e:
+            print(f"[WS] Registration failed: {e}")
         return
 
     user_data = await get_user_data(device_id)
@@ -707,7 +735,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         chunk_size = 1024
                         print(f"[{device_id}] Streaming {len(pcm_bytes)} bytes of test audio...")
                         for i in range(0, len(pcm_bytes), chunk_size):
-                            await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                            try:
+                                await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                            except Exception as send_err:
+                                print(f"[{device_id}] Play test stream failed: {send_err}")
+                                break
                             await asyncio.sleep(0.01)
                         print(f"[{device_id}] Finished streaming test audio.")
                     except Exception as e:
