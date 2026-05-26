@@ -34,40 +34,52 @@ def download_youtube_audio(query: str, output_base: str):
         
     sources.append(('none', None))
     
+    # Try different player clients to bypass DRM / blockages (mobile clients bypass cloud restrictions)
+    client_options = [
+        ['ios', 'android', 'mweb'], 
+        ['default']
+    ]
+    
     for source_type, val in sources:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'ytsearch',
-            'outtmpl': output_base + '.%(ext)s',
-        }
-        if source_type == 'file':
-            ydl_opts['cookiefile'] = val
-            print(f"[YouTube Agent] Trying to search/download using cookies file: {val}")
-        elif source_type == 'browser':
-            ydl_opts['cookiesfrombrowser'] = (val,)
-            print(f"[YouTube Agent] Trying to search/download using cookies from: {val}")
-        else:
-            print("[YouTube Agent] Trying to search/download without cookies (fallback)")
-            
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-                if 'entries' in info and len(info['entries']) > 0:
-                    entry = info['entries'][0]
-                    ext = entry.get('ext', 'webm')
-                    actual_file = f"{output_base}.{ext}"
-                    return actual_file, entry.get('title', 'Unknown')
-                elif 'id' in info:
-                    ext = info.get('ext', 'webm')
-                    actual_file = f"{output_base}.{ext}"
-                    return actual_file, info.get('title', 'Unknown')
-        except Exception as e:
-            print(f"[YouTube Agent] Failed with {source_type} '{val}': {e}")
-            continue
-            
+        for clients in client_options:
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'noplaylist': True,
+                'quiet': True,
+                'no_warnings': True,
+                'default_search': 'ytsearch',
+                'outtmpl': output_base + '.%(ext)s',
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': clients
+                    }
+                }
+            }
+            if source_type == 'file':
+                ydl_opts['cookiefile'] = val
+                print(f"[YouTube Agent] Trying download with cookies file ({val}) and clients {clients}")
+            elif source_type == 'browser':
+                ydl_opts['cookiesfrombrowser'] = (val,)
+                print(f"[YouTube Agent] Trying download with browser cookies ({val}) and clients {clients}")
+            else:
+                print(f"[YouTube Agent] Trying download without cookies and clients {clients}")
+                
+            try:
+                with YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                    if 'entries' in info and len(info['entries']) > 0:
+                        entry = info['entries'][0]
+                        ext = entry.get('ext', 'webm')
+                        actual_file = f"{output_base}.{ext}"
+                        return actual_file, entry.get('title', 'Unknown')
+                    elif 'id' in info:
+                        ext = info.get('ext', 'webm')
+                        actual_file = f"{output_base}.{ext}"
+                        return actual_file, info.get('title', 'Unknown')
+            except Exception as e:
+                print(f"[YouTube Agent] Failed with {source_type} '{val}' and clients {clients}: {e}")
+                continue
+                
     raise Exception("Failed to download audio from YouTube. All cookie sources and browser fallbacks failed.")
 
 def get_youtube_pcm(query: str):
