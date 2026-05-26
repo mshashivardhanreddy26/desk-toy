@@ -143,13 +143,13 @@ async def extract_memories(device_id, user_text, ai_text):
 
 async def get_ai_response(text, device_id):
     user_data = await get_user_data(device_id)
-    if not user_data: return "I'm lost.", "sad"
+    if not user_data: return "I'm lost.", "sad", None, None
     
     # Check if AI is enabled for this specific device
     if user_data.get("ai_enabled") == False:
         pause_msg = "My AI support is currently paused by the administrator."
         await save_live_message(device_id, "assistant", pause_msg, "sad")
-        return pause_msg, "sad"
+        return pause_msg, "sad", None, None
     
     # 1. Fetch Learned Memories
     db = get_db()
@@ -167,7 +167,8 @@ async def get_ai_response(text, device_id):
         f"RULES:\n"
         f"1. Use your memory to be a personal friend. Be expressive and use fillers (Oh, Hmm, Well) for realism.\n"
         f"2. Keep it very short (1-2 sentences).\n"
-        f"3. Respond in JSON format: {{'text': '...', 'emotion': '...'}}"
+        f"3. Respond in JSON format: {{\"text\": \"...\", \"emotion\": \"...\"}}.\n"
+        f"4. If the user asks you to play a song/music, you MUST include the fields `\"action\": \"play_music\"` and `\"song\": \"<song name>\"` in the JSON. Otherwise, do not include action and song fields. Example: {{\"text\": \"Sure! Playing Blinding Lights for you!\", \"emotion\": \"happy\", \"action\": \"play_music\", \"song\": \"Blinding Lights\"}}."
     )
 
     # 3. Fetch Recent Conversation History (Short-term context)
@@ -197,27 +198,63 @@ async def get_ai_response(text, device_id):
             
             ai_text = raw_content
             emotion = "happy"
+            action = None
+            song = None
             try:
-                import re
-                text_pattern = r'["\']text["\']\s*:\s*["\'](.*?)["\']\s*,\s*["\']emotion["\']'
-                match = re.search(text_pattern, raw_content, re.DOTALL)
-                if match: ai_text = match.group(1)
-                ai_text = ai_text.replace("\\'", "'").replace('\\"', '"').replace('\\n', ' ').strip()
+                # Find JSON block inside raw_content if markdown or other text is present
+                json_str = raw_content.strip()
+                if "```json" in json_str:
+                    json_str = json_str.split("```json")[1].split("```")[0].strip()
+                elif "```" in json_str:
+                    json_str = json_str.split("```")[1].split("```")[0].strip()
                 
-                emotion_pattern = r'["\']emotion["\']\s*:\s*["\'](.*?)["\']'
-                e_match = re.search(emotion_pattern, raw_content)
-                if e_match: emotion = e_match.group(1)
-            except: pass
+                # Locate outermost curly braces
+                if not json_str.startswith("{"):
+                    start = json_str.find("{")
+                    end = json_str.rfind("}")
+                    if start != -1 and end != -1:
+                        json_str = json_str[start:end+1]
+                
+                parsed_data = json.loads(json_str)
+                ai_text = parsed_data.get("text", "")
+                emotion = parsed_data.get("emotion", "happy")
+                action = parsed_data.get("action")
+                song = parsed_data.get("song")
+            except Exception as e:
+                print(f"[AI Parse] JSON parse failed, falling back to regex: {e}")
+                try:
+                    import re
+                    text_pattern = r'["\']text["\']\s*:\s*["\'](.*?)["\']'
+                    match = re.search(text_pattern, raw_content, re.DOTALL)
+                    if match: 
+                        ai_text = match.group(1)
+                    else:
+                        ai_text = raw_content
+                    ai_text = ai_text.replace("\\'", "'").replace('\\"', '"').replace('\\n', ' ').strip()
+                    
+                    emotion_pattern = r'["\']emotion["\']\s*:\s*["\'](.*?)["\']'
+                    e_match = re.search(emotion_pattern, raw_content)
+                    if e_match: emotion = e_match.group(1)
+                    
+                    action_pattern = r'["\']action["\']\s*:\s*["\'](.*?)["\']'
+                    act_match = re.search(action_pattern, raw_content)
+                    if act_match: action = act_match.group(1)
+                    
+                    song_pattern = r'["\']song["\']\s*:\s*["\'](.*?)["\']'
+                    song_match = re.search(song_pattern, raw_content)
+                    if song_match: song = song_match.group(1)
+                except Exception as ex:
+                    print(f"[AI Parse] Regex fallback failed: {ex}")
             
             await save_live_message(device_id, "assistant", ai_text, emotion)
             
             # Background task to learn about the user
             asyncio.create_task(extract_memories(device_id, text, ai_text))
             
-            return ai_text, emotion
+            return ai_text, emotion, action, song
     except Exception as e:
         print(f"AI Error: {e}")
-        return "I'm having trouble thinking right now.", "thinking"
+        return "I'm having trouble thinking right now.", "thinking", None, None
 
 # --- DASHBOARD UI ---
 @app.get("/favicon.ico")
@@ -385,8 +422,9 @@ async def user_chat(req: ChatRequest):
     if not user_data:
         raise HTTPException(status_code=403, detail="Device not registered.")
     
-    reply, emotion = await get_ai_response(req.text, req.device_id)
-    return {"status": "success", "reply": reply, "emotion": emotion}
+    reply, emotion, action, song = await get_ai_response(req.text, req.device_id)
+    return {"status": "success", "reply": reply, "emotion": emotion, "action": action, "song": song}
+
 
 @app.delete("/admin/delete-user/{uid}")
 async def delete_user_admin(uid: str):
@@ -463,60 +501,129 @@ async def verify_otp(req: dict):
         print(f"Auth Error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+# In-memory dictionary to track current playback tasks for each device
+active_playbacks = {}
+
+def cancel_device_playback(device_id: str):
+    if device_id in active_playbacks:
+        task = active_playbacks[device_id]
+        if not task.done():
+            task.cancel()
+            print(f"[{device_id}] Cancelled active audio playback task.")
+        try:
+            del active_playbacks[device_id]
+        except KeyError:
+            pass
+
+async def play_audio_stream(reply: str, voice: str, action: str, song: str, websocket: WebSocket, device_id: str):
+    try:
+        # 1. Play TTS response first
+        if reply and reply.strip():
+            # Apply custom Kid Tuning
+            rate = "+0%"
+            pitch = "+0Hz"
+            if voice == "en-US-GuyNeural":
+                rate = "+15%"
+                pitch = "+20Hz"
+            elif voice == "en-US-AnaNeural":
+                rate = "+5%"
+                pitch = "+10Hz"
+
+            communicate = Communicate(reply, voice, rate=rate, pitch=pitch)
+            mp3_data = bytearray()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    mp3_data.extend(chunk["data"])
+                    
+            if mp3_data:
+                # Save local MP3 copy
+                try:
+                    with open("response.mp3", "wb") as f:
+                        f.write(mp3_data)
+                    print("[TTS] Saved response.mp3 locally.")
+                except Exception as e:
+                    print(f"[TTS] Error saving response.mp3: {e}")
+
+                import miniaudio
+                try:
+                    decoded = miniaudio.decode(bytes(mp3_data), nchannels=1, sample_rate=22050, output_format=miniaudio.SampleFormat.SIGNED16)
+                    pcm_bytes = decoded.samples.tobytes()
+                    
+                    # Save local WAV copy
+                    try:
+                        import wave
+                        with wave.open("response.wav", "wb") as wav_file:
+                            wav_file.setnchannels(1)
+                            wav_file.setsampwidth(2)  # 16-bit
+                            wav_file.setframerate(22050)
+                            wav_file.writeframes(pcm_bytes)
+                        print("[TTS] Saved response.wav locally.")
+                    except Exception as e:
+                        print(f"[TTS] Error saving response.wav: {e}")
+
+                    chunk_size = 1024
+                    chunk_delay = chunk_size / 44100.0  # Real-time pacing (1024 bytes at 22050Hz Mono 16-bit is 23.2ms)
+                    for i in range(0, len(pcm_bytes), chunk_size):
+                        await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                        await asyncio.sleep(chunk_delay)
+                except asyncio.CancelledError:
+                    print(f"[{device_id}] Playback task cancelled during TTS stream.")
+                    raise
+                except Exception as e:
+                    print(f"Audio decode error: {e}")
+
+        # 2. Play song if action is play_music
+        if action == "play_music" and song:
+            print(f"[{device_id}] Triggering YouTube playback for song: {song}")
+            try:
+                # Try importing from backend first, then local fallback
+                try:
+                    from backend.youtube_agent import get_youtube_pcm
+                except ImportError:
+                    from youtube_agent import get_youtube_pcm
+
+                # Run CPU/IO-bound YouTube downloading & decoding in a thread pool executor
+                loop = asyncio.get_running_loop()
+                pcm_bytes, title = await loop.run_in_executor(None, get_youtube_pcm, song)
+                
+                # Send update to device/frontend
+                await websocket.send_text(json.dumps({"text": f"Playing: {title}", "emotion": "happy", "playing_music": True}))
+                
+                # Stream the PCM bytes
+                chunk_size = 2048
+                chunk_delay = chunk_size / 44100.0  # Real-time pacing (2048 bytes is 46.4ms)
+                print(f"[{device_id}] Streaming YouTube song '{title}' ({len(pcm_bytes)} bytes) to device...")
+                for i in range(0, len(pcm_bytes), chunk_size):
+                    await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
+                    await asyncio.sleep(chunk_delay)
+                print(f"[{device_id}] Finished streaming song '{title}'")
+            except asyncio.CancelledError:
+                print(f"[{device_id}] Playback task cancelled during YouTube stream.")
+                raise
+            except Exception as e:
+                print(f"[{device_id}] YouTube playback error: {e}")
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"[{device_id}] Error in play_audio_stream: {e}")
+    finally:
+        # Clean up
+        if device_id in active_playbacks and active_playbacks[device_id] == asyncio.current_task():
+            del active_playbacks[device_id]
+
 async def handle_user_input(text: str, device_id: str, websocket: WebSocket, fresh_user_data: dict):
-    reply, emotion = await get_ai_response(text, device_id)
-    await websocket.send_text(json.dumps({"text": reply, "emotion": emotion}))
+    reply, emotion, action, song = await get_ai_response(text, device_id)
+    await websocket.send_text(json.dumps({"text": reply, "emotion": emotion, "action": action, "song": song}))
+    
+    # Cancel any active audio playback first
+    cancel_device_playback(device_id)
     
     voice = fresh_user_data.get("voice", "en-US-AnaNeural") if fresh_user_data else "en-US-AnaNeural"
     
-    # Apply custom Kid Tuning
-    rate = "+0%"
-    pitch = "+0Hz"
-    if voice == "en-US-GuyNeural":
-        rate = "+15%"
-        pitch = "+20Hz"
-    elif voice == "en-US-AnaNeural":
-        rate = "+5%"
-        pitch = "+10Hz"
-
-    communicate = Communicate(reply, voice, rate=rate, pitch=pitch)
-    mp3_data = bytearray()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            mp3_data.extend(chunk["data"])
-            
-    if mp3_data:
-        # Save local MP3 copy
-        try:
-            with open("response.mp3", "wb") as f:
-                f.write(mp3_data)
-            print("[TTS] Saved response.mp3 locally.")
-        except Exception as e:
-            print(f"[TTS] Error saving response.mp3: {e}")
-
-        import miniaudio
-        try:
-            decoded = miniaudio.decode(bytes(mp3_data), nchannels=1, sample_rate=22050, output_format=miniaudio.SampleFormat.SIGNED16)
-            pcm_bytes = decoded.samples.tobytes()
-            
-            # Save local WAV copy
-            try:
-                import wave
-                with wave.open("response.wav", "wb") as wav_file:
-                    wav_file.setnchannels(1)
-                    wav_file.setsampwidth(2)  # 16-bit
-                    wav_file.setframerate(22050)
-                    wav_file.writeframes(pcm_bytes)
-                print("[TTS] Saved response.wav locally.")
-            except Exception as e:
-                print(f"[TTS] Error saving response.wav: {e}")
-
-            chunk_size = 1024
-            for i in range(0, len(pcm_bytes), chunk_size):
-                await websocket.send_bytes(pcm_bytes[i:i+chunk_size])
-                await asyncio.sleep(0.01) # Yield to prevent buffer overflow
-        except Exception as e:
-            print(f"Audio decode error: {e}")
+    # Start the playback task
+    task = asyncio.create_task(play_audio_stream(reply, voice, action, song, websocket, device_id))
+    active_playbacks[device_id] = task
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -552,6 +659,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if data == "START":
                     audio_buffer = bytearray()
                     print(f"[{device_id}] Started recording audio...")
+                    cancel_device_playback(device_id)
                 elif data == "STOP":
                     print(f"[{device_id}] Stopped recording audio. Processing {len(audio_buffer)} bytes...")
                     if len(audio_buffer) > 0:
@@ -586,10 +694,12 @@ async def websocket_endpoint(websocket: WebSocket):
                             print(f"[{device_id}] Audio processing error: {e}")
                 elif data.startswith("QUERY:"):
                     text = data[6:]
+                    cancel_device_playback(device_id)
                     fresh_user_data = await get_user_data(device_id)
                     await handle_user_input(text, device_id, websocket, fresh_user_data)
                 elif data == "PLAY_TEST":
                     print(f"[{device_id}] Starting audio test stream...")
+                    cancel_device_playback(device_id)
                     try:
                         import wave
                         with wave.open("response.wav", "rb") as wav_file:
