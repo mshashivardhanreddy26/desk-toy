@@ -607,8 +607,7 @@ async def play_audio_stream(reply: str, voice: str, action: str, song: str, webs
                     return
                 
                 # Stream the PCM bytes
-                chunk_size = 2048
-                chunk_delay = chunk_size / 44100.0  # Real-time pacing (2048 bytes is 46.4ms)
+                chunk_size = 1024
                 print(f"[{device_id}] Streaming YouTube song '{title}' ({len(pcm_bytes)} bytes) to device...")
                 for i in range(0, len(pcm_bytes), chunk_size):
                     try:
@@ -616,7 +615,7 @@ async def play_audio_stream(reply: str, voice: str, action: str, song: str, webs
                     except Exception as send_err:
                         print(f"[{device_id}] WebSocket send failed during YouTube stream: {send_err}")
                         break
-                    await asyncio.sleep(chunk_delay)
+                    await asyncio.sleep(0.01)
                 print(f"[{device_id}] Finished streaming song '{title}'")
             except asyncio.CancelledError:
                 print(f"[{device_id}] Playback task cancelled during YouTube stream.")
