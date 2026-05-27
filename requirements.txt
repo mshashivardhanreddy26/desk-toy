@@ -11,3 +11,4 @@ miniaudio
 yt-dlp
 pydub
 static-ffmpeg
+bgutil-ytdlp-pot-provider
