@@ -65,7 +65,7 @@ def download_youtube_audio(query: str, output_base: str):
     # Try different player clients to bypass DRM / blockages (mobile clients bypass cloud restrictions)
     client_options = [
         ['ios', 'android', 'mweb'], 
-        ['default']
+        None # Use yt-dlp's default player clients (including web)
     ]
     
     # Configure a modern user agent (allows matching cookies and avoiding basic anti-bot blocks)
@@ -83,12 +83,16 @@ def download_youtube_audio(query: str, output_base: str):
                 'default_search': 'ytsearch',
                 'outtmpl': output_base + '.%(ext)s',
                 'user_agent': user_agent,
-                'extractor_args': {
+            }
+            if clients:
+                ydl_opts['extractor_args'] = {
                     'youtube': {
                         'player_client': clients
                     }
                 }
-            }
+            # Add pot provider options if available
+            # bgutil-ytdlp-pot-provider will handle this automatically if installed,
+            # but we configure it as a native fallback in case.
             if source_type == 'file':
                 ydl_opts['cookiefile'] = val
                 print(f"[YouTube Agent] Trying download with cookies file ({val}) and clients {clients}")
